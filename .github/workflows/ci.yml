@@ -1,0 +1,25 @@
+# Builds the package on both platforms it ships for. There are no tests: everything here drives
+# a live AppKit/UIKit hierarchy, which needs a running app rather than a test host.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (macOS)
+        run: swift build -v
+
+      - name: Build (iOS)
+        run: |
+          xcodebuild -scheme AgentPadDevHelper \
+            -destination 'generic/platform=iOS' \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            build
