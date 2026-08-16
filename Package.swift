@@ -19,5 +19,6 @@ let package = Package(
         // A headless demo "app under development" that declares an AgentPad card, streams a value,
         // and applies control writes — so the DevKit round-trip is runnable via `swift run`.
         .executableTarget(name: "AgentPadDevSample", dependencies: ["AgentPadDevHelper"]),
+        .testTarget(name: "AgentPadDevHelperTests", dependencies: ["AgentPadDevHelper"]),
     ]
 )
