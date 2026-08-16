@@ -34,14 +34,14 @@ That's `ui_snapshot` output — the whole UI as ~40 tokens instead of a screensh
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/LoopwareCo/AgentPadDevHelper", from: "1.0.1"),
+    .package(url: "https://github.com/LoopwareCo/AgentPadDevHelper", from: "1.0.0"),
 ],
 targets: [
     .target(name: "MyApp", dependencies: ["AgentPadDevHelper"]),
 ]
 ```
 
-Requires Swift 5.9+, macOS 15+, iOS 18+.
+Requires Swift 5.9+, macOS 12+, iOS 15+ — no deploy-target bump for any realistic project.
 
 ## Use
 
@@ -76,15 +76,15 @@ There is nothing to configure. Your app **dials out** to any AgentPad on the mac
 reconnects for as long as it runs, so AgentPad doesn't have to be running first — start either
 one in either order.
 
-> `start(port:bindLAN:token:advertise:)` still exists for source compatibility with 1.0.0, but
-> its arguments are **ignored**: the app no longer hosts a listener, so there's no port to bind
-> and nothing to advertise.
+> `start(port:bindLAN:token:advertise:)` still exists for source compatibility with an earlier
+> hosted-listener design, but its arguments are **ignored**: the app no longer hosts a listener,
+> so there's no port to bind and nothing to advertise.
 
 ### No Info.plist edits
 
-1.0.0 required `NSLocalNetworkUsageDescription` + `NSBonjourServices` to be discoverable.
-Dialling out needs neither — there's no advertisement and no inbound socket, so there's no
-local-network consent to grant and nothing for the OS to filter.
+An in-app listener would need `NSLocalNetworkUsageDescription` + `NSBonjourServices` to be
+discoverable. Dialling out needs neither — there's no advertisement and no inbound socket, so
+there's no local-network consent to grant and nothing for the OS to filter.
 
 ## Widgets — live values out of your app
 
