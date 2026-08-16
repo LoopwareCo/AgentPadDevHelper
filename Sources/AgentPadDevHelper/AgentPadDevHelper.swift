@@ -10,10 +10,22 @@ import Foundation
 /// every reachable AgentPad (dev + release, Unix socket + loopback TCP, optional LAN via
 /// `AGENTPAD_DEVKIT_HOST`) and reconnects forever — AgentPad doesn't need to be running yet.
 ///
-/// SAFETY: this opens a UI-control channel, so it is **debug-only by design** — `start()` is a no-op
-/// in release builds (compiled out via `#if DEBUG`). Never ship it enabled.
+/// SAFETY: this opens a UI-control channel, so it is **debug-only by design**, and the SDK enforces
+/// that itself — call `start()` unconditionally from your app's launch path and don't build a flag
+/// around it. Two layers, neither of which you have to remember:
+///   1. `start()` is compiled out entirely by `#if DEBUG` — SwiftPM builds this package with your
+///      app's configuration, so a Release build has no code to call;
+///   2. even in a Debug-configured binary it refuses to open the channel if the app carries any
+///      evidence of having been distributed — a TestFlight or App Store receipt, a distribution
+///      provisioning profile, or a Developer ID signature (see `BuildTrust`). That covers the case
+///      layer 1 can't: a Debug-config archive uploaded to TestFlight.
+/// Refusals say why, once, via `NSLog`.
 public enum AgentPadDevHelper {
     private static var started = false
+
+    /// What the SDK decided about this build, and why — `.development` when the dial-out is
+    /// allowed. Exposed so an app can show its own diagnostics; `start()` applies it for you.
+    public static var buildTrust: BuildTrust.Verdict { BuildTrust.current }
 
     /// Begin dialing out to AgentPad.
     ///
@@ -27,10 +39,17 @@ public enum AgentPadDevHelper {
         start()
     }
 
-    /// Begin dialing out to AgentPad.
+    /// Begin dialing out to AgentPad. Safe to call unconditionally: it does nothing in a Release
+    /// build, and nothing in a build that has been shipped (see the note above).
     public static func start() {
         #if DEBUG
         guard !started else { return }
+        if case .shipped(let reason) = BuildTrust.current {
+            // Deliberately loud but harmless: a developer who wonders why their app isn't showing
+            // up in AgentPad gets told, and a shipped build gets a log line rather than a channel.
+            NSLog("AgentPadDevHelper: not starting — \(reason). The UI-control channel only runs in development builds.")
+            return
+        }
         started = true
         DevKitClient.shared.start()
         #endif
