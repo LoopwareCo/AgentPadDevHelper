@@ -46,6 +46,12 @@ final class DevToolHandler {
                 guard let path = arguments["path"] as? String else { return completion("ERROR: missing 'path'.", true) }
                 let r = self.driver.shot(path: path, window: arguments["window"] as? String)
                 completion(r, r.hasPrefix("ERROR"))
+            case "review_mode":
+                // AgentPad's Connected Apps bar flipping Review UI Mode on/off. `setActive`
+                // reports back through the `reviewMode` frame either way; a repeat is a no-op.
+                let enabled = arguments["enabled"] as? Bool ?? true
+                ReviewModeController.shared.setActive(enabled)
+                completion("ok: review mode \(enabled ? "on" : "off")", false)
             case "widgets_list":
                 completion(AgentPadDev.shared.widgetsListJSON(), false)
             case "widgets_values":

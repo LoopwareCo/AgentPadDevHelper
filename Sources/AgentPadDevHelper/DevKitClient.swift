@@ -35,6 +35,12 @@ final class DevKitClient {
         AppIdentity.prepareIcon()
         dev.onWidgetsChanged = { [weak self] in self?.broadcastWidgets() }
         dev.onValueChanged = { [weak self] widgetId, json in self?.broadcastValue(widgetId, json) }
+        // Review UI Mode reports through the same fan-out. Wired on main because the
+        // controller is main-thread-confined (it owns windows).
+        DispatchQueue.main.async { [weak self] in
+            ReviewModeController.shared.onSubmit = { payload in self?.broadcastFeedback(payload) }
+            ReviewModeController.shared.onModeChanged = { active in self?.broadcastReviewMode(active) }
+        }
 
         for endpoint in Self.candidateEndpoints() {
             let session = Session(endpoint: endpoint, client: self)
@@ -81,10 +87,19 @@ final class DevKitClient {
     static func candidateEndpoints() -> [Endpoint] {
         var out: [Endpoint] = []
         #if os(macOS)
-        if let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+        // No unix rungs for a SANDBOXED app: its Application Support resolves to the app
+        // CONTAINER — not where AgentPad's socket lives, unreadable even if it were, and the
+        // container path routinely blows the 104-byte `sun_path` limit, which Network.framework
+        // answers with a TRAP (not an error) the moment the NWConnection is created. Loopback
+        // TCP is the sandbox transport. The length guard below covers the un-sandboxed
+        // deep-home-directory case the same way the ingress guards its bind side.
+        if ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] == nil,
+           let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             let dir = support.appendingPathComponent("AgentPad", isDirectory: true)
-            out.append(Endpoint(kind: .unixSocket(path: dir.appendingPathComponent(DevKit.devSocketName).path)))
-            out.append(Endpoint(kind: .unixSocket(path: dir.appendingPathComponent(DevKit.releaseSocketName).path)))
+            for name in [DevKit.devSocketName, DevKit.releaseSocketName] {
+                let path = dir.appendingPathComponent(name).path
+                if unixPathFits(path) { out.append(Endpoint(kind: .unixSocket(path: path))) }
+            }
         }
         #endif
         out.append(Endpoint(kind: .tcp(host: "127.0.0.1", port: DevKit.devTCPPort)))
@@ -105,6 +120,11 @@ final class DevKitClient {
     }
 
     #if os(macOS)
+    /// Whether a unix-socket path fits `sockaddr_un.sun_path` (104 bytes incl. NUL on Darwin).
+    /// `NWConnection` TRAPS on an over-long unix path rather than reporting an error, and this
+    /// runs inside someone else's app — mirror of the `bind`-side guard in `DevKitIngress`.
+    static func unixPathFits(_ path: String) -> Bool { path.utf8.count < 104 }
+
     /// True when this process is running inside a macOS VM guest (as opposed to bare hardware) — the
     /// documented sysctl for it.
     private static func isRunningInsideVM() -> Bool {
@@ -163,6 +183,18 @@ final class DevKitClient {
     private func broadcastValue(_ widgetId: String, _ json: String) {
         lock.lock(); let all = Array(sessions.values); lock.unlock()
         all.forEach { $0.sendValue(widgetId: widgetId, json: json) }
+    }
+    /// One piece of Review-UI feedback → every claimed session (a dev AND a release AgentPad
+    /// watching this app both get it, same as widgets).
+    private func broadcastFeedback(_ payload: FeedbackPayload) {
+        guard let data = try? JSONEncoder().encode(payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        lock.lock(); let all = Array(sessions.values); lock.unlock()
+        all.forEach { $0.sendFeedback(json) }
+    }
+    private func broadcastReviewMode(_ active: Bool) {
+        lock.lock(); let all = Array(sessions.values); lock.unlock()
+        all.forEach { $0.sendReviewMode(active) }
     }
 
     fileprivate func handleCall(tool: String, argsJSON: String, completion: @escaping (String, Bool) -> Void) {
@@ -265,6 +297,18 @@ private final class Session {
         queue.async { [weak self] in
             guard let self, self.claimed else { return }
             self.send(["values": ["widgetId": widgetId, "valuesJSON": json]])
+        }
+    }
+    func sendFeedback(_ payloadJSON: String) {
+        queue.async { [weak self] in
+            guard let self, self.claimed else { return }
+            self.send(["feedback": ["payloadJSON": payloadJSON]])
+        }
+    }
+    func sendReviewMode(_ active: Bool) {
+        queue.async { [weak self] in
+            guard let self, self.claimed else { return }
+            self.send(["reviewMode": ["active": active]])
         }
     }
 

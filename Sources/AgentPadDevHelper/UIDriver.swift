@@ -285,7 +285,7 @@ extension UIDriver {
         return false
     }
 
-    private static func role(_ v: UIView) -> String {
+    static func role(_ v: UIView) -> String {
         switch v {
         case is UISwitch: return "switch"
         case is UITextField: return "textField"
@@ -301,7 +301,7 @@ extension UIDriver {
         default: return String(describing: type(of: v))
         }
     }
-    private static func label(_ v: UIView) -> String? {
+    static func label(_ v: UIView) -> String? {
         if let nav = v as? UINavigationBar { return nav.topItem?.title ?? v.accessibilityLabel }
         if let l = v.accessibilityLabel, !l.isEmpty { return l }
         if let b = v as? UIButton { return b.currentTitle ?? b.titleLabel?.text }
@@ -323,7 +323,7 @@ extension UIDriver {
         let n = String(describing: type(of: v))
         return n.contains("ButtonBar") || n.contains("BarButton")
     }
-    private static func value(_ v: UIView) -> String? {
+    static func value(_ v: UIView) -> String? {
         if let val = v.accessibilityValue, !val.isEmpty { return val }
         if let tf = v as? UITextField { return tf.text }
         if let tv = v as? UITextView { return tv.text }
@@ -496,7 +496,7 @@ extension UIDriver {
         return false
     }
 
-    private static func role(_ v: NSView) -> String {
+    static func role(_ v: NSView) -> String {
         switch v {
         case let b as NSButton:
             switch b.accessibilityRole() {
@@ -514,7 +514,7 @@ extension UIDriver {
         default: return String(describing: type(of: v))
         }
     }
-    private static func label(_ v: NSView) -> String? {
+    static func label(_ v: NSView) -> String? {
         if let l = v.accessibilityLabel(), !l.isEmpty { return l }
         if let b = v as? NSButton { return b.title }
         if let tf = v as? NSTextField, !tf.isEditable { return tf.stringValue }
@@ -534,7 +534,7 @@ extension UIDriver {
         }
         return nil
     }
-    private static func value(_ v: NSView) -> String? {
+    static func value(_ v: NSView) -> String? {
         if let tf = v as? NSTextField, tf.isEditable { return tf.stringValue }
         if let tv = v as? NSTextView { return tv.string }
         if let sw = v as? NSSwitch { return stateString(sw.state) }

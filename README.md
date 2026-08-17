@@ -146,9 +146,11 @@ LAN binding, no token. Running two apps side by side? Give each its own port.
 | `ui_act` | Activate an element by `ref` (tap a button, select a row, toggle a switch) |
 | `ui_setvalue` | Set a text field/view's value by `ref`, firing its change handlers |
 | `ui_inspect` | One element's role, label, value, and available actions |
+| `ui_read` | A subtree's (or the whole app's) visible text in reading order — the prose view |
 | `ui_focus` | Which view holds keyboard focus, and whether it's an editable text editor |
 | `ui_key` | Type real key events into the app's own event queue — **macOS only** |
 | `ui_shot` | Write a PNG of one of the app's windows |
+| `review_mode` | Enter/leave **Review UI Mode**: an in-app floating bar where the user taps UI elements and leaves feedback that lands back in AgentPad's UI Feedback Inbox |
 | `widgets_list` | The widgets this app has declared |
 | `widgets_values` | The current values behind a widget's bindings |
 | `widget_set` | Write a control's value, as if the user moved it |
