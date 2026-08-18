@@ -105,7 +105,7 @@ final class DevKitClient {
         out.append(Endpoint(kind: .tcp(host: "127.0.0.1", port: DevKit.devTCPPort)))
         out.append(Endpoint(kind: .tcp(host: "127.0.0.1", port: DevKit.releaseTCPPort)))
         #if os(macOS)
-        if isRunningInsideVM(), let gateway = defaultGatewayAddress() {
+        if AppIdentity.isInsideVM, let gateway = defaultGatewayAddress() {
             out.append(Endpoint(kind: .tcp(host: gateway, port: DevKit.devTCPPort)))
             out.append(Endpoint(kind: .tcp(host: gateway, port: DevKit.releaseTCPPort)))
         }
@@ -124,15 +124,6 @@ final class DevKitClient {
     /// `NWConnection` TRAPS on an over-long unix path rather than reporting an error, and this
     /// runs inside someone else's app — mirror of the `bind`-side guard in `DevKitIngress`.
     static func unixPathFits(_ path: String) -> Bool { path.utf8.count < 104 }
-
-    /// True when this process is running inside a macOS VM guest (as opposed to bare hardware) — the
-    /// documented sysctl for it.
-    private static func isRunningInsideVM() -> Bool {
-        var value: Int32 = 0
-        var size = MemoryLayout<Int32>.size
-        guard sysctlbyname("kern.hv_vmm_present", &value, &size, nil, 0) == 0 else { return false }
-        return value != 0
-    }
 
     /// This guest's default gateway (the vmnet NAT address, e.g. `192.168.64.1`) — shells out to
     /// `route -n get default` and reads its `gateway:` line, the simplest reliable way to get it
@@ -284,6 +275,12 @@ private final class Session {
         if AppIdentity.isSimulator { obj["sim"] = true }
         if !AppIdentity.version.isEmpty { obj["version"] = AppIdentity.version }
         if let icon = AppIdentity.iconPNGBase64 { obj["iconPNG"] = icon }
+        // Inside a VM, say so and say WHERE: AgentPad scopes the app to the session whose VM has this
+        // address, and knows not to treat `pid` as one of its own Mac's (see `AppIdentity.guestAddress`).
+        if AppIdentity.isInsideVM {
+            obj["vm"] = true
+            if let address = AppIdentity.guestAddress { obj["vmAddress"] = address }
+        }
         send(["hello": obj])
     }
 

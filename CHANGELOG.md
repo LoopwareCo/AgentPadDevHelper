@@ -35,7 +35,9 @@ this is the clean slate.)
   (Unix socket, then loopback TCP, then a VM host's gateway, then `AGENTPAD_DEVKIT_HOST`) and
   reconnects forever, so either process can start first. No Info.plist keys, no
   local-network consent, no entitlements — an App-Sandboxed macOS app needs only
-  `com.apple.security.network.client`.
+  `com.apple.security.network.client`. An app running inside a macOS VM says so when it
+  connects (and reports the guest's own address), so AgentPad lists it under the session
+  whose VM it's in rather than under every session.
 - **Minimum platforms: macOS 12 / iOS 15** — adding the package never forces a deploy-target
   bump.
 - **Debug-only by construction.** `start()` compiles to nothing in release builds; the optional
