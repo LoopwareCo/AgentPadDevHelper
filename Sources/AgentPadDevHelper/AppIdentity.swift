@@ -42,6 +42,60 @@ enum AppIdentity {
         #endif
     }
 
+    /// True when this process is running inside a macOS VM guest (as opposed to bare hardware) — the
+    /// documented sysctl for it. Also decides whether the dial-out ladder tries the host's vmnet
+    /// gateway (`DevKitClient.candidateEndpoints`).
+    static var isInsideVM: Bool {
+        #if os(macOS)
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname("kern.hv_vmm_present", &value, &size, nil, 0) == 0 else { return false }
+        return value != 0
+        #else
+        return false
+        #endif
+    }
+
+    /// This guest's own IPv4 address, sent in `hello` ONLY when `isInsideVM` — it's what lets AgentPad
+    /// tell WHICH session's VM this app is running in, and so which session's Connected Apps bar it
+    /// belongs in. The connection itself can't answer that: the guest may reach the ingress over the
+    /// vmnet gateway (peer address = this address) or through an ssh reverse-forward (peer address =
+    /// the host's own loopback, indistinguishable from an app running on the Mac). Not sent on bare
+    /// hardware, where AgentPad has no use for it.
+    static var guestAddress: String? {
+        #if os(macOS)
+        guard isInsideVM else { return nil }
+        return primaryIPv4()
+        #else
+        return nil
+        #endif
+    }
+
+    #if os(macOS)
+    /// First non-loopback IPv4 on an `en*` interface — the guest's vmnet address. `getifaddrs` needs
+    /// no entitlement and no consent (unlike anything that would TOUCH the network).
+    private static func primaryIPv4() -> String? {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return nil }
+        defer { freeifaddrs(first) }
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let p = cursor {
+            defer { cursor = p.pointee.ifa_next }
+            guard let sa = p.pointee.ifa_addr, sa.pointee.sa_family == sa_family_t(AF_INET) else { continue }
+            guard String(cString: p.pointee.ifa_name).hasPrefix("en") else { continue }
+            var sin = sockaddr_in()
+            withUnsafeMutableBytes(of: &sin) { dst in
+                dst.copyMemory(from: UnsafeRawBufferPointer(start: sa, count: MemoryLayout<sockaddr_in>.size))
+            }
+            var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            guard inet_ntop(AF_INET, &sin.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN)) != nil else { continue }
+            let address = String(cString: buf)
+            if address != "0.0.0.0", address != "127.0.0.1" { return address }
+        }
+        return nil
+    }
+    #endif
+
     // MARK: icon
 
     private static let iconLock = NSLock()
