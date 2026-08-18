@@ -1,6 +1,16 @@
 # Changelog
 
-## 1.0.0 — 2026-08-17
+## Unreleased
+
+- **SwiftUI and macOS 26+ toolbar items are now drivable (macOS).** The `ui_*` driver used to
+  walk only the NSView tree, which SwiftUI controls (and, from macOS 26 on, the SwiftUI-rendered
+  internals of AppKit toolbar items) never appear in. The driver now materializes the app's
+  accessibility tree in-process (the same `AXEnhancedUserInterface` flag VoiceOver sets — no
+  system Accessibility grant, sandbox-safe) and grafts the AX-only elements into the walk:
+  SwiftUI buttons/toggles/fields under an `NSHostingView` show up in `ui_snapshot`/`ui_find`
+  with their labels and can be driven with `ui_act`/`ui_setvalue`, and toolbar items read as
+  `button "Label"` and activate via their AX press. Note: the flag stays on for the process
+  lifetime (dev builds only) and can subtly change window animation behavior in some apps.
 
 First public release. (Earlier pre-release tags were retired before anyone depended on them —
 this is the clean slate.)
