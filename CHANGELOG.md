@@ -1,16 +1,6 @@
 # Changelog
 
-## Unreleased
-
-- **SwiftUI and macOS 26+ toolbar items are now drivable (macOS).** The `ui_*` driver used to
-  walk only the NSView tree, which SwiftUI controls (and, from macOS 26 on, the SwiftUI-rendered
-  internals of AppKit toolbar items) never appear in. The driver now materializes the app's
-  accessibility tree in-process (the same `AXEnhancedUserInterface` flag VoiceOver sets — no
-  system Accessibility grant, sandbox-safe) and grafts the AX-only elements into the walk:
-  SwiftUI buttons/toggles/fields under an `NSHostingView` show up in `ui_snapshot`/`ui_find`
-  with their labels and can be driven with `ui_act`/`ui_setvalue`, and toolbar items read as
-  `button "Label"` and activate via their AX press. Note: the flag stays on for the process
-  lifetime (dev builds only) and can subtly change window animation behavior in some apps.
+## 1.0.0 — 2026-08-18
 
 First public release. (Earlier pre-release tags were retired before anyone depended on them —
 this is the clean slate.)
@@ -18,6 +8,20 @@ this is the clean slate.)
 - **UI driving, in-process.** `AgentPadDevHelper.start()` lets AgentPad read the app's live view
   tree and act on it: `ui_snapshot`, `ui_read`, `ui_find`, `ui_act`, `ui_setvalue`, `ui_inspect`,
   `ui_focus`, `ui_key` (macOS), `ui_shot`.
+- **SwiftUI and macOS 26+ toolbar items are drivable (macOS).** A driver that walked only the
+  NSView tree would never see SwiftUI controls (or, from macOS 26 on, the SwiftUI-rendered
+  internals of AppKit toolbar items). The driver materializes the app's accessibility tree
+  in-process instead (the same `AXEnhancedUserInterface` flag VoiceOver sets — no system
+  Accessibility grant, sandbox-safe) and grafts the AX-only elements into the walk: SwiftUI
+  buttons/toggles/fields under an `NSHostingView` show up in `ui_snapshot`/`ui_find` with their
+  labels and can be driven with `ui_act`/`ui_setvalue`, toolbar items read as `button "Label"`
+  and activate via their AX press, and **Choose UI** selects them too. Note: the flag stays on
+  for the process lifetime (dev builds only) and can subtly change window animation behavior in
+  some apps.
+- **iOS alert buttons activate (iOS 26/27).** Alert actions are no longer `UIControl`s and
+  `accessibilityActivate()` is a no-op on them, so `ui_act` matches the action by title on the
+  owning `UIAlertController`, runs it, and dismisses; the actions list advertises accessibility
+  buttons rather than gating on `UIControl`.
 - **Widgets.** `AgentPadDev.shared.widget(_:title:symbol:)` declares a small live panel in
   AgentPad's inspector; `push(_:_:)` streams values into its `"$name"` bindings; `onControl`
   receives writes when the user moves a control. Rows: `labelValue`, `text`, `gauge`, `bar`,
@@ -42,6 +46,10 @@ this is the clean slate.)
   bump.
 - **Debug-only by construction.** `start()` compiles to nothing in release builds; the optional
   `startLoopbackDriver(port:)` (a `127.0.0.1`-only HTTP JSON-RPC endpoint for MCP clients other
-  than AgentPad) compiles out too.
+  than AgentPad) compiles out too. That driver has one deliberate exception:
+  `AGENTPAD_DEVKIT_DRIVER_LAN=1` binds it to all interfaces so an app on a REAL iOS device is
+  drivable from the development Mac (a device's loopback is unreachable from outside, and the
+  dial-out ingress doesn't listen on the LAN). Off unless the launcher passes it, DEBUG-only,
+  and never appropriate outside a trusted development network.
 - `DevHelperPackage` constants (`repositoryURL`, `minimumVersion`) so tooling can name the
   package without hardcoding either.
