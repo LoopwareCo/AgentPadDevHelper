@@ -1,24 +1,12 @@
 # Changelog
 
-## Unreleased
-
-- **Review UI Mode.** AgentPad can flip the app into a review mode (`review_mode` tool, or the
-  Connected Apps bar's "Review UI" button): a floating AgentPad bar appears — above the Dock on
-  macOS, as a status-bar strip + compose card on iOS — where the user types feedback about the
-  UI they're looking at, or hits **Choose UI** and clicks/press-holds an element to attach it
-  (full ancestor path back to the window root, with frames). Feedback rides the dial-out
-  connection into AgentPad's UI Feedback Inbox. Public payload types: `FeedbackPayload`,
-  `FeedbackElementDescriptor`, `FeedbackElementNode`.
-- `ui_read` (present since 1.0.0) is now listed by `tools/list` and documented — it executed
-  before but was undiscoverable.
-
-## 1.0.0 — 2026-08-16
+## 1.0.0 — 2026-08-17
 
 First public release. (Earlier pre-release tags were retired before anyone depended on them —
 this is the clean slate.)
 
 - **UI driving, in-process.** `AgentPadDevHelper.start()` lets AgentPad read the app's live view
-  tree and act on it: `ui_snapshot`, `ui_find`, `ui_act`, `ui_setvalue`, `ui_inspect`,
+  tree and act on it: `ui_snapshot`, `ui_read`, `ui_find`, `ui_act`, `ui_setvalue`, `ui_inspect`,
   `ui_focus`, `ui_key` (macOS), `ui_shot`.
 - **Widgets.** `AgentPadDev.shared.widget(_:title:symbol:)` declares a small live panel in
   AgentPad's inspector; `push(_:_:)` streams values into its `"$name"` bindings; `onControl`
@@ -26,6 +14,13 @@ this is the clean slate.)
   `sparkline`, `keyValueGrid`, `button`, and the controls `slider`, `stepper`, `toggle`,
   `segmented`, `textField`, `colorWell`, `fontPicker`. Matching tools: `widgets_list`,
   `widgets_values`, `widget_set`.
+- **Review UI Mode.** AgentPad can flip the app into a review mode (`review_mode` tool, or the
+  Connected Apps bar's "Review UI" button): a floating AgentPad bar appears — above the Dock on
+  macOS, as a status-bar strip + compose card on iOS — where the user types feedback about the
+  UI they're looking at, or hits **Choose UI** and clicks/press-holds an element to attach it
+  (full ancestor path back to the window root, with frames). Feedback rides the dial-out
+  connection into AgentPad's UI Feedback Inbox. Public payload types: `FeedbackPayload`,
+  `FeedbackElementDescriptor`, `FeedbackElementNode`.
 - **Dial-out transport, nothing to configure.** The app connects OUT to AgentPad's ingress
   (Unix socket, then loopback TCP, then a VM host's gateway, then `AGENTPAD_DEVKIT_HOST`) and
   reconnects forever, so either process can start first. No Info.plist keys, no
