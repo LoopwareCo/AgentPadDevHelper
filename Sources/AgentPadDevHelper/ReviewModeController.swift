@@ -98,10 +98,10 @@ final class ReviewModeController {
         guard overlay == nil else { return }
         barViewController?.setChoosing(true)
         let o = ReviewOverlay()
-        o.onPickView = { [weak self] view in
+        o.onPickElement = { [weak self] chosen in
             guard let self else { return }
             self.overlay = nil
-            self.attachedElement = ElementPath.descriptor(for: view)
+            self.attachedElement = ElementPath.descriptor(for: chosen)
             self.attachedIsDefault = false
             self.barViewController?.setChoosing(false)
             self.pushElementToBar()

@@ -93,9 +93,9 @@ private final class ReviewOverlayWindow: NSWindow {
 }
 
 /// Owns the choosing session on the Mac: one `ReviewOverlayWindow` per target window, plus an
-/// Esc monitor. `onPick(view)` / `onCancel()` fire exactly once.
+/// Esc monitor. `onPickElement` / `onCancel()` fire exactly once.
 final class ReviewOverlay {
-    var onPickView: ((NSView) -> Void)?
+    var onPickElement: ((ElementPath.ChosenElement) -> Void)?
     var onCancel: (() -> Void)?
 
     private var overlays: [ReviewOverlayWindow] = []
@@ -134,21 +134,21 @@ final class ReviewOverlay {
     }
 
     private func hover(host: NSWindow, point: NSPoint) {
-        guard !finished, let view = ElementPath.hitTest(at: point, in: host),
+        guard !finished, let chosen = ElementPath.hitTestElement(at: point, in: host),
               let overlay = overlays.first(where: { $0.host === host }) else { return }
         // Clear every other window's highlight so exactly one rect is visible app-wide.
         for other in overlays where other !== overlay && other.highlight.rect != nil {
             other.highlight.rect = nil
             other.highlight.needsDisplay = true
         }
-        overlay.highlight.rect = ElementPath.frameInWindow(of: view)
-        overlay.highlight.name = ElementPath.displayName(for: ElementPath.node(for: view))
+        overlay.highlight.rect = ElementPath.frameInWindow(of: chosen)
+        overlay.highlight.name = ElementPath.displayName(for: ElementPath.leafNode(for: chosen))
         overlay.highlight.needsDisplay = true
     }
 
     private func pick(host: NSWindow, point: NSPoint) {
-        guard let view = ElementPath.hitTest(at: point, in: host) else { return }
-        finish { $0.onPickView?(view) }
+        guard let chosen = ElementPath.hitTestElement(at: point, in: host) else { return }
+        finish { $0.onPickElement?(chosen) }
     }
 
     private func finish(_ deliver: (ReviewOverlay) -> Void) {
@@ -260,7 +260,7 @@ private final class ReviewOverlayViewController: UIViewController {
 /// Owns the iOS choosing session: one overlay `UIWindow` above everything, torn down on
 /// commit/cancel.
 final class ReviewOverlay {
-    var onPickView: ((UIView) -> Void)?
+    var onPickElement: ((ElementPath.ChosenElement) -> Void)?
     var onCancel: (() -> Void)?
 
     private var window: UIWindow?
@@ -275,7 +275,7 @@ final class ReviewOverlay {
             ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         guard let scene else { return }
         let vc = ReviewOverlayViewController()
-        vc.onPickView = { [weak self] view in self?.finish { $0.onPickView?(view) } }
+        vc.onPickView = { [weak self] view in self?.finish { $0.onPickElement?(.view(view)) } }
         vc.onCancel = { [weak self] in self?.finish { $0.onCancel?() } }
         let w = UIWindow(windowScene: scene)
         w.windowLevel = .alert + 10
