@@ -29,10 +29,23 @@ final class LoopbackDriver {
         params.allowLocalEndpointReuse = true
         // The port rides IN requiredLocalEndpoint — passing it to `NWListener(using:on:)` as well
         // makes the initializer throw (conflicting port specs), which `try?` silently swallowed.
-        params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: p)   // loopback-only
-        guard let l = try? NWListener(using: params) else {
-            NSLog("AgentPadDevHelper: loopback driver failed to bind 127.0.0.1:\(port)"); return
+        //
+        // Loopback-only, with ONE deliberate, env-gated exception: `AGENTPAD_DEVKIT_DRIVER_LAN=1`
+        // binds all interfaces so a REAL iOS device's driver is reachable from the development
+        // Mac (a physical device's loopback is unreachable from outside, and the dial-out ingress
+        // doesn't listen on the LAN — this is the only way to ui-drive an app on hardware). It's
+        // DEBUG-only code to begin with, off unless the launcher passes the env var, and never
+        // appropriate outside a trusted development network.
+        let lanExposed = ProcessInfo.processInfo.environment["AGENTPAD_DEVKIT_DRIVER_LAN"] == "1"
+        if lanExposed {
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "0.0.0.0", port: p)
+        } else {
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: p)   // loopback-only
         }
+        guard let l = try? NWListener(using: params) else {
+            NSLog("AgentPadDevHelper: loopback driver failed to bind \(lanExposed ? "0.0.0.0" : "127.0.0.1"):\(port)"); return
+        }
+        if lanExposed { NSLog("AgentPadDevHelper: loopback driver EXPOSED ON ALL INTERFACES (AGENTPAD_DEVKIT_DRIVER_LAN=1), port \(port)") }
         l.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
         l.stateUpdateHandler = { state in
             if case .failed(let e) = state { NSLog("AgentPadDevHelper: loopback driver listener failed: \(e)") }

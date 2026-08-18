@@ -237,6 +237,26 @@ extension UIDriver {
             table.delegate?.tableView?(table, didSelectRowAt: ip)
             return true
         }
+        // iOS 26/27 alert buttons (`_UIInterfaceActionCustomViewRepresentationView`) are custom
+        // representation views whose `accessibilityActivate()` is a NO-OP — route through the
+        // owning UIAlertController instead: match the action by its title and run its handler,
+        // then dismiss. (The general fix — synthesized touches — is tracked separately; this
+        // covers the alert case that blocks any flow ending in a confirm button.)
+        if NSStringFromClass(type(of: v)).contains("ActionCustomViewRepresentationView") {
+            var responder: UIResponder? = v
+            while let cur = responder, !(cur is UIAlertController) { responder = cur.next }
+            if let alert = responder as? UIAlertController,
+               let title = v.accessibilityLabel,
+               let action = alert.actions.first(where: { $0.title == title && $0.isEnabled }) {
+                alert.dismiss(animated: false) {
+                    if let block = action.value(forKey: "handler") {
+                        typealias Handler = @convention(block) (UIAlertAction) -> Void
+                        unsafeBitCast(block as AnyObject, to: Handler.self)(action)
+                    }
+                }
+                return true
+            }
+        }
         // Prefer accessibilityActivate(): UIKit routes it to the real action for buttons, BAR
         // buttons (whose internal control ignores touchUpInside), switches, etc. Fall back to
         // sendActions for custom UIControls that don't implement activation.
@@ -333,6 +353,11 @@ extension UIDriver {
     private static func actions(_ v: UIView) -> [String] {
         var a: [String] = []
         if v is UIControl || v is UITableViewCell || v is UICollectionViewCell { a.append("activate") }
+        // Accessibility elements that aren't UIControls still activate through
+        // `accessibilityActivate()` — modern UIKit chrome (alert ACTION views, nav-bar platter
+        // items) is built this way, and gating on UIControl made every iOS 27 alert button read
+        // as "not activatable" while the perform path below would have handled it fine.
+        else if v.isAccessibilityElement && v.accessibilityTraits.contains(.button) { a.append("activate") }
         if v is UITextField || v is UITextView { a.append("setValue") }
         return a
     }
