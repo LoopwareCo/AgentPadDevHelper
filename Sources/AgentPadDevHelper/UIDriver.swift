@@ -381,18 +381,30 @@ extension UIDriver {
         // titlebar + toolbar are walked too — otherwise custom toolbar controls (e.g. the project
         // title control) are invisible and unreachable. Fall back to `contentView` if there's no
         // frame view. An open NSPopover is its own window, so it shows up here as another root.
-        NSApp?.windows.filter { $0.isVisible }.compactMap { $0.contentView?.superview ?? $0.contentView } ?? []
+        AXBridge.materializeIfNeeded()   // make SwiftUI build its AX nodes before any walk
+        return NSApp?.windows.filter { $0.isVisible }.compactMap { $0.contentView?.superview ?? $0.contentView } ?? []
     }
 
-    func childElements(of obj: AnyObject) -> [AnyObject] { (obj as? NSView)?.subviews ?? [] }
+    func childElements(of obj: AnyObject) -> [AnyObject] {
+        guard let v = obj as? NSView else {
+            // An AX-only element (SwiftUI AccessibilityNode): descend through its own AX
+            // children. Views are excluded — anything view-backed is reached by the view walk.
+            return AXBridge.elementChildren(of: obj)
+        }
+        var kids: [AnyObject] = v.subviews
+        // SwiftUI hosting views draw most controls without any NSView behind them; the elements
+        // live only on the (materialized) AX layer, so graft those in as extra children.
+        if AXBridge.isHostingView(v) { kids += AXBridge.elementChildren(of: v) }
+        return kids
+    }
 
     func isVisible(_ obj: AnyObject) -> Bool {
-        guard let v = obj as? NSView else { return false }
+        guard let v = obj as? NSView else { return !(obj is NSCell) }   // AX elements are walked as-is
         return !v.isHidden
     }
 
     func makeNode(for obj: AnyObject, ref: Int) -> UINode {
-        let v = obj as! NSView
+        guard let v = obj as? NSView else { return AXBridge.node(for: obj, ref: ref) }
         let center = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil)
         return UINode(ref: ref, role: Self.role(v), label: Self.label(v), value: Self.value(v),
                       identifier: v.identifier?.rawValue,
@@ -401,6 +413,8 @@ extension UIDriver {
     }
 
     func perform(_ obj: AnyObject, action: String) -> Bool {
+        // AX-only elements (SwiftUI controls) have exactly one way to be driven: the AX press.
+        if !(obj is NSView) { return AXBridge.press(obj) }
         // "focus" puts KEYBOARD FOCUS on the element (a table row focuses its table, the way
         // clicking a row does) without activating it — the starting state for a `ui_key` test.
         if action == "focus", let v = obj as? NSView {
@@ -445,6 +459,10 @@ extension UIDriver {
                 if let action = click.action, NSApp.sendAction(action, to: click.target, from: click) { return true }
             }
         }
+        // Last resort: views that are actionable only on the AX layer. The one that matters is
+        // NSToolbarItemViewer — on macOS 26+ a toolbar item's label AND press-ability live here,
+        // while the inner control (if any) is an anonymous SwiftUI-rendered shell.
+        if let v = obj as? NSView, AXBridge.canPress(v) { return AXBridge.press(v) }
         return false
     }
 
@@ -511,6 +529,8 @@ extension UIDriver {
     }
 
     func assign(_ obj: AnyObject, text: String) -> Bool {
+        // AX-only elements (SwiftUI text fields): the AX value setter is the real input path.
+        if !(obj is NSView) { return AXBridge.setValue(obj, text: text) }
         // Numeric controls: parse the text and drive them like a user gesture (value + action).
         if let s = obj as? NSSlider, let d = Double(text) { s.doubleValue = d; s.sendAction(s.action, to: s.target); return true }
         if let st = obj as? NSStepper, let d = Double(text) { st.doubleValue = d; st.sendAction(st.action, to: st.target); return true }
@@ -536,13 +556,24 @@ extension UIDriver {
         case is NSTableView: return "table"
         case is NSScrollView: return "scrollView"
         case is NSControl: return "control"
-        default: return String(describing: type(of: v))
+        default:
+            // Views whose real identity lives on the AX layer (NSToolbarItemViewer is
+            // role=AXButton there) read as their generic role instead of a private class name.
+            if let raw = AXBridge.rawRole(v), let generic = AXBridge.genericRole(raw), generic != "group" {
+                return generic
+            }
+            return String(describing: type(of: v))
         }
     }
     static func label(_ v: NSView) -> String? {
         if let l = v.accessibilityLabel(), !l.isEmpty { return l }
         if let b = v as? NSButton { return b.title }
-        if let tf = v as? NSTextField, !tf.isEditable { return tf.stringValue }
+        if let tf = v as? NSTextField {
+            if !tf.isEditable { return tf.stringValue }
+            // An editable field is NAMED by its placeholder (what iOS already does) — it's also
+            // the only handle a SwiftUI TextField's platform view carries.
+            if let p = tf.placeholderString, !p.isEmpty { return p }
+        }
         // A custom control wired with a click gesture (e.g. the toolbar project title) has no title
         // of its own — surface its first descendant label so it's findable by its visible text.
         if v.gestureRecognizers.contains(where: { $0 is NSClickGestureRecognizer }) {
@@ -576,6 +607,7 @@ extension UIDriver {
         var a: [String] = []
         if v is NSControl { a.append("activate") }
         else if v.gestureRecognizers.contains(where: { $0 is NSClickGestureRecognizer }) { a.append("activate") }
+        else if AXBridge.canPress(v) { a.append("activate") }   // AX-layer actionability (toolbar items)
         if let tf = v as? NSTextField, tf.isEditable { a.append("setValue") }
         if v is NSTextView { a.append("setValue") }
         return a
