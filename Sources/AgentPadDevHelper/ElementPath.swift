@@ -48,9 +48,12 @@ public struct FeedbackElementDescriptor: Codable {
 public struct FeedbackPayload: Codable {
     public var message: String
     public var element: FeedbackElementDescriptor?
+    /// A 1x PNG of the reviewed window at submit time, base64. Optional — capture can fail
+    /// or be skipped when the encoded frame would blow the ingress line budget.
+    public var screenshotPNG: String?
 
-    public init(message: String, element: FeedbackElementDescriptor? = nil) {
-        self.message = message; self.element = element
+    public init(message: String, element: FeedbackElementDescriptor? = nil, screenshotPNG: String? = nil) {
+        self.message = message; self.element = element; self.screenshotPNG = screenshotPNG
     }
 }
 
@@ -134,9 +137,32 @@ enum ElementPath {
         return s.count > 200 ? String(s.prefix(200)) : s
     }
 
+    /// The reviewed window as a 1x PNG, base64 — visual context that rides each feedback
+    /// item. 1x on purpose: a Retina capture quadruples the bytes for context nobody zooms,
+    /// and the ingress frames are newline-JSON with a line budget. Returns nil when there's
+    /// no window, the render fails, or the result is still too big to put on the wire.
+    static func captureWindowPNGBase64() -> String? {
+        guard let png = captureWindowPNG() else { return nil }
+        // ~4 MB of PNG is ~5.3 MB of base64 — stay comfortably under the ingress's 16 MB
+        // line cap even with several fields around it.
+        guard png.count <= 4_000_000 else { return nil }
+        return png.base64EncodedString()
+    }
+
     // MARK: platform specifics
 
     #if canImport(UIKit)
+
+    private static func captureWindowPNG() -> Data? {
+        guard let window = targetWindows().first(where: { $0.isKeyWindow }) ?? targetWindows().first else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+        }
+        return image.pngData()
+    }
+
 
     /// The deepest visible view under `point` (in `window` coordinates) that's worth giving
     /// feedback on. Plain `UIView.hitTest` — the same answer a touch would get — minus views
@@ -183,6 +209,28 @@ enum ElementPath {
     }
 
     #else
+
+    private static func captureWindowPNG() -> Data? {
+        let windows = targetWindows()
+        guard let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first,
+              let view = window.contentView?.superview ?? window.contentView,
+              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        // Downscale the (usually Retina) capture to 1x — draw it into a point-sized bitmap.
+        let size = view.bounds.size
+        guard size.width >= 1, size.height >= 1,
+              let scaled = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                            pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
+                                            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                            isPlanar: false, colorSpaceName: .deviceRGB,
+                                            bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: scaled) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        rep.draw(in: NSRect(origin: .zero, size: size))
+        NSGraphicsContext.restoreGraphicsState()
+        return scaled.representation(using: .png, properties: [:])
+    }
 
     /// The deepest view under `point` (window base coordinates) in `window`'s hierarchy.
     /// Hit-testing the frame view (`contentView.superview`) covers the titlebar/toolbar too,

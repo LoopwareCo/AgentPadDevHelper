@@ -131,7 +131,10 @@ final class ReviewModeController {
         if attachedIsDefault {
             attachedElement = ElementPath.defaultTarget().map(ElementPath.descriptor(for:))
         }
-        onSubmit?(FeedbackPayload(message: message, element: attachedElement))
+        // The reviewed window, as the user sees it right now (the bar/overlay are their own
+        // windows, so they're not in the shot).
+        let screenshot = ElementPath.captureWindowPNGBase64()
+        onSubmit?(FeedbackPayload(message: message, element: attachedElement, screenshotPNG: screenshot))
         // Back to the default scope for the next thought.
         attachedIsDefault = true
         refreshDefaultElement()
