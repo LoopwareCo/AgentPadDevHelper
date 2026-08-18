@@ -53,15 +53,13 @@ final class ReviewBarViewController: NSViewController, NSTextFieldDelegate {
     static let barWidth: CGFloat = 560
 
     override func loadView() {
-        // The glass: NSVisualEffectView behind everything, rounded 20 (the bar rests at
-        // 3 × 4pt-grid rows and this radius is what makes it read as AgentPad's capsule).
+        // The glass: NSVisualEffectView behind everything. No rounding of our own — the bar
+        // lives in a standard (titled, controls-hidden) window, and the WINDOW owns the
+        // shape, so the shadow and the corners always agree.
         let effect = NSVisualEffectView()
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow
         effect.state = .active
-        effect.wantsLayer = true
-        effect.layer?.cornerRadius = 20
-        effect.layer?.masksToBounds = true
 
         titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         titleLabel.textColor = .secondaryLabelColor

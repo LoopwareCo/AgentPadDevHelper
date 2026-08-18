@@ -168,14 +168,19 @@ final class ReviewModeController {
         guard barPanel == nil, NSApp != nil else { return }
         let bar = ReviewBarViewController(appName: UIDriver.appName)
         wireBar(bar)
-        // Borderless + non-activating: typing in the bar must not yank the reviewed app's
-        // windows around, and hovering it must not activate anything.
+        // A STANDARD titled window (controls hidden), not a borderless one: the system then
+        // owns the shape, so the shadow hugs the rounded corners instead of boxing them (a
+        // borderless panel's shadow was computed off the rectangular frame). Non-activating:
+        // typing in the bar must not yank the reviewed app's windows around.
         let panel = ReviewBarPanel(contentRect: .zero,
-                                   styleMask: [.borderless, .nonactivatingPanel],
+                                   styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel],
                                    backing: .buffered, defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        for which in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            panel.standardWindowButton(which)?.isHidden = true
+        }
+        panel.isMovableByWindowBackground = true       // grab any empty glass and drag
         panel.level = .statusBar                       // above every app window, below screensaver
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isFloatingPanel = true
