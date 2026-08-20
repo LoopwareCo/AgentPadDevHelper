@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-08-19
+
+The first resolvable release. (The retired `1.0.0` tag was withdrawn — the package
+versions as 0.9.x until AgentPad itself reaches 1.0; everything below ships in 0.9.0.)
 
 - **In-app UI reviews — `AgentPadDevHelper.enableUIFeedback(.localOnly)`.** Developers (and
   their beta testers) can now leave Review-UI feedback FROM the app, without AgentPad
@@ -29,10 +32,7 @@
 - The pending list renders with the same card views AgentPad's UI Feedback Inbox uses
   (`FeedbackCardView` / `FeedbackCardModel`, now public in this package).
 
-## 1.0.0 — 2026-08-18
-
-First public release. (Earlier pre-release tags were retired before anyone depended on them —
-this is the clean slate.)
+### Also in 0.9.0 — the original feature set
 
 - **UI driving, in-process.** `AgentPadDevHelper.start()` lets AgentPad read the app's live view
   tree and act on it: `ui_snapshot`, `ui_read`, `ui_find`, `ui_act`, `ui_setvalue`, `ui_inspect`,

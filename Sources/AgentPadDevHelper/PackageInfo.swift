@@ -12,5 +12,5 @@ public enum DevHelperPackage {
     /// this is a checked constant and never derived from the app's own CFBundleVersion (dev builds
     /// bump constantly and would promise tags that were never published). `publish-devhelper.sh`
     /// refuses to publish a tag older than this.
-    public static let minimumVersion = "1.0.0"
+    public static let minimumVersion = "0.9.0"
 }
