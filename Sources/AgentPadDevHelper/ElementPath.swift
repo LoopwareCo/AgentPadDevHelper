@@ -74,8 +74,10 @@ enum ElementPath {
 
     #if canImport(UIKit)
     typealias PlatformView = UIView
+    typealias PlatformWindow = UIWindow
     #else
     typealias PlatformView = NSView
+    typealias PlatformWindow = NSWindow
     #endif
 
     /// What Choose UI can land on: a real platform view, or (macOS) an AX-only element inside a
@@ -187,6 +189,19 @@ enum ElementPath {
         }
     }
 
+    /// The window a chosen element lives in. An explicit choice pins the screenshot to ITS
+    /// window, so clicking elsewhere between choosing and sending can't swap the shot.
+    static func window(of chosen: ChosenElement) -> PlatformWindow? {
+        switch chosen {
+        case .view(let view):
+            return view.window
+        #if !canImport(UIKit) && canImport(AppKit)
+        case .axElement(_, let host):
+            return host.window
+        #endif
+        }
+    }
+
     private static func truncated(_ s: String?) -> String? {
         guard let s, !s.isEmpty else { return nil }
         return s.count > 200 ? String(s.prefix(200)) : s
@@ -196,8 +211,8 @@ enum ElementPath {
     /// item. 1x on purpose: a Retina capture quadruples the bytes for context nobody zooms,
     /// and the ingress frames are newline-JSON with a line budget. Returns nil when there's
     /// no window, the render fails, or the result is still too big to put on the wire.
-    static func captureWindowPNGBase64() -> String? {
-        guard let png = captureWindowPNG() else { return nil }
+    static func captureWindowPNGBase64(of pinned: PlatformWindow? = nil) -> String? {
+        guard let png = captureWindowPNG(of: pinned) else { return nil }
         // ~4 MB of PNG is ~5.3 MB of base64 — stay comfortably under the ingress's 16 MB
         // line cap even with several fields around it.
         guard png.count <= 4_000_000 else { return nil }
@@ -208,8 +223,8 @@ enum ElementPath {
 
     #if canImport(UIKit)
 
-    private static func captureWindowPNG() -> Data? {
-        guard let window = targetWindows().first(where: { $0.isKeyWindow }) ?? targetWindows().first else { return nil }
+    private static func captureWindowPNG(of pinned: PlatformWindow?) -> Data? {
+        guard let window = pinned.flatMap({ w in targetWindows().first { $0 === w } }) ?? reviewedWindow() else { return nil }
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
@@ -240,11 +255,23 @@ enum ElementPath {
         }
     }
 
-    /// What the user is looking at when they open the composer without choosing: the key
+    /// The window Review Mode is about. NOT simply the key window: the compose card takes key
+    /// while the user types, so from then on none of the app's own windows is key. Fall back to
+    /// the last app window that WAS key, then the topmost one by level — never plain
+    /// "first window we happen to enumerate", which is an arbitrary window.
+    static func reviewedWindow() -> UIWindow? {
+        let windows = targetWindows()
+        if let key = windows.first(where: { $0.isKeyWindow }) { return key }
+        if let last = ReviewModeController.lastKeyAppWindow, windows.contains(where: { $0 === last }) { return last }
+        let top = windows.map(\.windowLevel).max()
+        return windows.last { $0.windowLevel == top }
+    }
+
+    /// What the user is looking at when they open the composer without choosing: the reviewed
     /// window's TOP view controller's view (not the root — a pushed/presented screen is the
     /// thing on screen).
     static func defaultTarget() -> UIView? {
-        guard let window = targetWindows().first(where: { $0.isKeyWindow }) ?? targetWindows().first,
+        guard let window = reviewedWindow(),
               var vc = window.rootViewController else { return nil }
         while true {
             if let presented = vc.presentedViewController { vc = presented; continue }
@@ -265,9 +292,9 @@ enum ElementPath {
 
     #else
 
-    private static func captureWindowPNG() -> Data? {
+    private static func captureWindowPNG(of pinned: PlatformWindow?) -> Data? {
         let windows = targetWindows()
-        guard let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first,
+        guard let window = pinned.flatMap({ w in windows.first { $0 === w } }) ?? reviewedWindow(),
               let view = window.contentView?.superview ?? window.contentView,
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
         view.cacheDisplay(in: view.bounds, to: rep)
@@ -374,13 +401,36 @@ enum ElementPath {
         }
     }
 
-    /// What the user is looking at: the key (else main, else frontmost) window's content
-    /// view-controller's view, falling back to the content view.
+    /// The window Review Mode is about — the one the user is working in, and the one every
+    /// shot and default element resolves against.
+    ///
+    /// NOT simply the key window: the compose bar takes key the moment the mode turns on, so
+    /// from then on none of the app's own windows is key. Fall back to the last app window
+    /// that WAS key, then main, then the FRONTMOST in z-order — `NSApp.windows` is ordered by
+    /// creation, so its first element is whichever window the app built first (an app that
+    /// opens a welcome window at launch would screenshot that one forever).
+    static func reviewedWindow() -> NSWindow? {
+        chooseReviewedWindow(from: targetWindows(),
+                             lastKey: ReviewModeController.lastKeyAppWindow,
+                             main: NSApp?.mainWindow,
+                             ordered: NSApp?.orderedWindows ?? [])
+    }
+
+    /// The policy behind `reviewedWindow()`, split out so it can be tested without a window
+    /// server (the bug it exists for happens precisely when NOTHING in `windows` is key).
+    static func chooseReviewedWindow(from windows: [NSWindow], lastKey: NSWindow?,
+                                     main: NSWindow?, ordered: [NSWindow]) -> NSWindow? {
+        if let key = windows.first(where: { $0.isKeyWindow }) { return key }
+        if let lastKey, windows.contains(lastKey) { return lastKey }
+        if let main, windows.contains(main) { return main }
+        if let front = ordered.first(where: { windows.contains($0) }) { return front }
+        return windows.first
+    }
+
+    /// What the user is looking at: the reviewed window's content view-controller's view,
+    /// falling back to the content view.
     static func defaultTarget() -> NSView? {
-        let windows = targetWindows()
-        guard let window = windows.first(where: { $0.isKeyWindow })
-            ?? NSApp?.mainWindow.flatMap({ windows.contains($0) ? $0 : nil })
-            ?? windows.first else { return nil }
+        guard let window = reviewedWindow() else { return nil }
         return window.contentViewController?.view ?? window.contentView
     }
 
