@@ -115,6 +115,21 @@ enum AppIdentity {
         iconPNG?.base64EncodedString()
     }
 
+    /// The cached icon as a platform image, for the SDK's own feedback cards. Rasterizes on
+    /// first use if `prepareIcon()` hasn't run (main-thread callers only, like everything else
+    /// that draws).
+    #if canImport(UIKit)
+    static func decodedIcon() -> UIImage? {
+        prepareIcon()
+        return iconPNG.flatMap { UIImage(data: $0) }
+    }
+    #elseif canImport(AppKit)
+    static func decodedIcon() -> NSImage? {
+        prepareIcon()
+        return iconPNG.flatMap { NSImage(data: $0) }
+    }
+    #endif
+
     /// Rasterize + cache the app icon. Safe to call from any thread; hops to main because it draws.
     static func prepareIcon() {
         iconLock.lock()

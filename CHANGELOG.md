@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- **In-app UI reviews — `AgentPadDevHelper.enableUIFeedback(.localOnly)`.** Developers (and
+  their beta testers) can now leave Review-UI feedback FROM the app, without AgentPad
+  activating anything:
+  - macOS: an "AgentPad" grouping appears at the end of the app's Help menu — "Leave UI Review
+    Feedback…" and "View & Send (N) UI Feedbacks…". (An app with no Help menu gets no menu
+    entry.)
+  - iOS: TRIPLE-tap the status bar for a chooser (leave feedback / view pending / cancel). The
+    review strip is redesigned: gradient over the status bar with "+ UI Review" (left) and
+    "Done" (right), and it's now the one strip both activation paths show.
+  - Unlike `start()`, `enableUIFeedback` is NOT development-gated — it opens no control
+    channel. `.localOnly` never dials out: feedback stays on the device until the user sends
+    it via the standard share panel, as one `.agentpadfeedback` file the developer opens in
+    AgentPad.
+  - `.appKey("apk_…")` — YOUR OWN devices: feedback syncs over the local network to the one
+    AgentPad that minted the key (Server Settings → Apps → Add Key). Discovery is Bonjour
+    (`_agentpad-apps._tcp`, advertised only while the server holds keys); every frame is
+    sealed to the key (HKDF → ChaChaPoly), and the connection is feedback-only by
+    construction — a key can add inbox items and nothing else. The host app must declare
+    `NSLocalNetworkUsageDescription` and `NSBonjourServices` (`_agentpad-apps._tcp`) in its
+    Info.plist.
+- **Offline-first feedback outbox.** Every submitted review is persisted in the app's own
+  container the moment the user hits send, uploaded when a (new enough) AgentPad is reachable,
+  and deleted only on the server's acknowledgment — quitting AgentPad, dropped connections, or
+  the app crashing mid-send no longer lose feedback. Capped at 200 items, oldest evicted.
+- The pending list renders with the same card views AgentPad's UI Feedback Inbox uses
+  (`FeedbackCardView` / `FeedbackCardModel`, now public in this package).
+
 ## 1.0.0 — 2026-08-18
 
 First public release. (Earlier pre-release tags were retired before anyone depended on them —

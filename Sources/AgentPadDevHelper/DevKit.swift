@@ -17,4 +17,16 @@ public enum DevKit {
     /// `AGENTPAD_DEVKIT_HOST` — an optional extra `"host:port"` dial-out target (a LAN AgentPad, or a
     /// real iOS device reaching a Mac by address) read by `DevKitClient`'s fallback ladder.
     public static let lanHostEnvVar = "AGENTPAD_DEVKIT_HOST"
+
+    // MARK: keyed feedback (the app-key LAN transport)
+
+    /// The Bonjour service AgentPad's KEYED feedback ingress advertises on the LAN — only while
+    /// the server has at least one app key, and only for feedback-only keyed connections
+    /// (`enableUIFeedback(.appKey(...))`). Both flavors advertise the one type; the key decides
+    /// which server accepts. A host app that uses `.appKey` must list this type in its own
+    /// Info.plist `NSBonjourServices` (plus `NSLocalNetworkUsageDescription`).
+    public static let appsServiceType = "_agentpad-apps._tcp"
+    /// HKDF info string for the sealed keyed frames — one shared constant so the app and the
+    /// server can't derive different session keys from the same secret + nonce.
+    public static let feedbackSealInfo = "agentpad-feedback-v1"
 }

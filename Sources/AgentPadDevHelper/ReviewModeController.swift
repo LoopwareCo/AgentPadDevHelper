@@ -21,8 +21,10 @@ final class ReviewModeController {
     static let shared = ReviewModeController()
     private init() {}
 
-    /// Submitted feedback, ready for the wire. Wired by `DevKitClient` to the `feedback` frame.
-    var onSubmit: ((FeedbackPayload) -> Void)?
+    /// Submitted feedback, already persisted to the outbox and ready for the wire. Wired by
+    /// `DevKitClient` to the `feedback` frame; the outbox file is deleted only on a server's
+    /// `feedbackAck`, so a submit with no reachable server just waits on disk.
+    var onSubmit: ((OutboxItem) -> Void)?
     /// Mode changes (both directions). Wired by `DevKitClient` to the `reviewMode` frame.
     var onModeChanged: ((Bool) -> Void)?
 
@@ -134,7 +136,11 @@ final class ReviewModeController {
         // The reviewed window, as the user sees it right now (the bar/overlay are their own
         // windows, so they're not in the shot).
         let screenshot = ElementPath.captureWindowPNGBase64()
-        onSubmit?(FeedbackPayload(message: message, element: attachedElement, screenshotPNG: screenshot))
+        // Outbox FIRST, wire second: the item is durable the moment the user hits send,
+        // whether or not any AgentPad is reachable right now.
+        let item = FeedbackOutbox.shared.record(
+            FeedbackPayload(message: message, element: attachedElement, screenshotPNG: screenshot))
+        onSubmit?(item)
         // Back to the default scope for the next thought.
         attachedIsDefault = true
         refreshDefaultElement()
@@ -264,6 +270,7 @@ final class ReviewModeController {
         strip.frame = CGRect(x: 0, y: 0, width: scene.screen.bounds.width, height: height)
         let vc = ReviewStripViewController()
         vc.onCompose = { [weak self] in self?.presentComposer() }
+        vc.onDone = { [weak self] in self?.setActive(false) }
         strip.rootViewController = vc
         strip.isHidden = false
         stripWindow = strip
@@ -299,10 +306,12 @@ final class ReviewModeController {
         barViewController?.focusField()
     }
 
-    /// The status-bar takeover strip: brand gradient, the AgentPad face on the left,
-    /// "+ Compose" on the right.
+    /// The status-bar takeover strip — the ONE review-mode chrome, whoever activated the mode
+    /// (AgentPad's `review_mode` call or the app's own triple-tap entry): brand gradient
+    /// covering the status bar, "+ UI Review" in the LEFT corner, "Done" in the RIGHT.
     private final class ReviewStripViewController: UIViewController {
         var onCompose: (() -> Void)?
+        var onDone: (() -> Void)?
         private let gradient = CAGradientLayer()
 
         override func viewDidLoad() {
@@ -310,18 +319,19 @@ final class ReviewModeController {
             gradient.colors = ReviewModeController.brandGradient
             view.layer.insertSublayer(gradient, at: 0)
 
-            let face = UILabel()
-            face.text = ">_<"
-            face.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .bold)
-            face.textColor = .white
+            let review = UIButton(type: .system)
+            review.setTitle("+ UI Review", for: .normal)
+            review.setTitleColor(.white, for: .normal)
+            review.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+            review.addTarget(self, action: #selector(composeTapped), for: .touchUpInside)
 
-            let compose = UIButton(type: .system)
-            compose.setTitle("+ Compose", for: .normal)
-            compose.setTitleColor(.white, for: .normal)
-            compose.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
-            compose.addTarget(self, action: #selector(composeTapped), for: .touchUpInside)
+            let done = UIButton(type: .system)
+            done.setTitle("Done", for: .normal)
+            done.setTitleColor(.white, for: .normal)
+            done.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+            done.addTarget(self, action: #selector(doneTapped), for: .touchUpInside)
 
-            let row = UIStackView(arrangedSubviews: [face, UIView(), compose])
+            let row = UIStackView(arrangedSubviews: [review, UIView(), done])
             row.axis = .horizontal
             row.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(row)
@@ -340,6 +350,7 @@ final class ReviewModeController {
         }
 
         @objc private func composeTapped() { onCompose?() }
+        @objc private func doneTapped() { onDone?() }
     }
 
     #endif

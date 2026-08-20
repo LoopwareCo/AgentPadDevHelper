@@ -52,7 +52,43 @@ public enum AgentPadDevHelper {
         }
         started = true
         DevKitClient.shared.start()
+        // Development builds get the developer entry points too (Help-menu grouping / status-bar
+        // triple-tap) — feedback then rides the dial-out connections like everything else.
+        FeedbackEntryPoints.shared.install(mode: .debugDialOut)
         #endif
+    }
+
+    // MARK: - UI feedback capture (shippable, capture-only)
+
+    /// How feedback captured via `enableUIFeedback` leaves the device.
+    public enum UIFeedbackMode {
+        /// Feedback ONLY stores on this device; the user decides to share it (the pending list's
+        /// share panel writes one `.agentpadfeedback` file the developer opens in AgentPad).
+        /// Nothing dials out — safe to ship to beta testers.
+        case localOnly
+        /// YOUR OWN devices only: feedback syncs over the local network to the ONE AgentPad
+        /// that minted this key (Server Settings → Apps → Add Key). Feedback-only — the key
+        /// authorizes pushing inbox items, never UI driving. The host app's Info.plist must
+        /// declare `NSLocalNetworkUsageDescription` and `NSBonjourServices` with
+        /// `_agentpad-apps._tcp`; feedback crosses your WiFi sealed to the key.
+        case appKey(String)
+    }
+
+    /// Turn on in-app UI reviews: the entry points (macOS: an "AgentPad" grouping at the end of
+    /// the Help menu; iOS: triple-tap the status bar) plus the on-device outbox behind them.
+    ///
+    /// Unlike `start()`, this is NOT development-gated — it opens no control channel. Everything
+    /// it enables is user-initiated capture that stays on the device until the user (or, in a
+    /// development build, the dial-out sync) moves it. Call it unconditionally, or only for the
+    /// builds you want collecting feedback.
+    public static func enableUIFeedback(_ mode: UIFeedbackMode = .localOnly) {
+        switch mode {
+        case .localOnly:
+            FeedbackEntryPoints.shared.install(mode: .localOnly)
+        case .appKey(let key):
+            KeyedFeedbackClient.shared.start(fullKey: key)
+            FeedbackEntryPoints.shared.install(mode: .appKey)
+        }
     }
 
     /// Stop every dial-out connection.

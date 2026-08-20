@@ -176,12 +176,11 @@ final class DevKitClient {
         all.forEach { $0.sendValue(widgetId: widgetId, json: json) }
     }
     /// One piece of Review-UI feedback → every claimed session (a dev AND a release AgentPad
-    /// watching this app both get it, same as widgets).
-    private func broadcastFeedback(_ payload: FeedbackPayload) {
-        guard let data = try? JSONEncoder().encode(payload),
-              let json = String(data: data, encoding: .utf8) else { return }
+    /// watching this app both get it, same as widgets). The item is already in the outbox;
+    /// whichever server acks first deletes it — an unreachable server just leaves it parked.
+    private func broadcastFeedback(_ item: OutboxItem) {
         lock.lock(); let all = Array(sessions.values); lock.unlock()
-        all.forEach { $0.sendFeedback(json) }
+        all.forEach { $0.sendFeedback(item) }
     }
     private func broadcastReviewMode(_ active: Bool) {
         lock.lock(); let all = Array(sessions.values); lock.unlock()
@@ -296,11 +295,24 @@ private final class Session {
             self.send(["values": ["widgetId": widgetId, "valuesJSON": json]])
         }
     }
-    func sendFeedback(_ payloadJSON: String) {
+    func sendFeedback(_ item: OutboxItem) {
         queue.async { [weak self] in
             guard let self, self.claimed else { return }
-            self.send(["feedback": ["payloadJSON": payloadJSON]])
+            self.sendFeedbackFrame(item)
         }
+    }
+
+    /// The `feedback` envelope: `id` + `capturedAt` ride NEXT TO the payload (not inside it) so
+    /// an old server — which only reads `payloadJSON` — still stores the item; it just never
+    /// acks, and the outbox keeps the file. `queue`.
+    private func sendFeedbackFrame(_ item: OutboxItem) {
+        // The screenshot lives in a sidecar file — attach it only now, for this one frame.
+        let full = FeedbackOutbox.shared.fullItem(item)
+        guard let data = try? JSONEncoder().encode(full.payload),
+              let payloadJSON = String(data: data, encoding: .utf8) else { return }
+        send(["feedback": ["payloadJSON": payloadJSON,
+                           "id": item.id,
+                           "capturedAt": WireDate.iso8601.string(from: item.capturedAt)]])
     }
     func sendReviewMode(_ active: Bool) {
         queue.async { [weak self] in
@@ -344,6 +356,9 @@ private final class Session {
         guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
         if let welcome = obj["welcome"] as? [String: Any] { handleWelcome(welcome); return }
         if let call = obj["call"] as? [String: Any] { handleCall(call); return }
+        if let ack = obj["feedbackAck"] as? [String: Any], let id = ack["id"] as? String {
+            handleFeedbackAck(id); return
+        }
     }
 
     private func handleWelcome(_ w: [String: Any]) {
@@ -363,12 +378,50 @@ private final class Session {
         }
         claimed = true
         backoff = 2
+        // A server that acks feedback (welcome `acks`) gets the parked outbox re-sent. An OLD
+        // server never would ack, so re-sending there would store a fresh duplicate per
+        // reconnect — its users still get live submits, just no catch-up.
+        acksSupported = (w["acks"] as? Bool) == true
         sendHello()   // register only AFTER winning the claim for this server
         let specsJSON = AgentPadDev.shared.specsArrayJSON()
         if specsJSON != "[]" { send(["widgets": ["specsJSON": specsJSON]]) }
         for (widgetId, json) in AgentPadDev.shared.valuesSnapshot() {
             send(["values": ["widgetId": widgetId, "valuesJSON": json]])
         }
+        startDrain()
+    }
+
+    // MARK: outbox drain (send parked feedback one item per ack — items can carry ~4 MB
+    // screenshots, and dumping the whole backlog into one socket buffer would hold megabytes in
+    // memory for a transfer TCP paces anyway)
+
+    private var acksSupported = false
+    private var pendingDrain: [OutboxItem] = []
+    private var drainTimeout: DispatchWorkItem?
+
+    private func startDrain() {
+        guard acksSupported else { return }
+        pendingDrain = FeedbackOutbox.shared.all()
+        sendNextDrainItem()
+    }
+
+    private func sendNextDrainItem() {
+        drainTimeout?.cancel(); drainTimeout = nil
+        guard claimed, acksSupported, !pendingDrain.isEmpty else { return }
+        let item = pendingDrain.removeFirst()
+        sendFeedbackFrame(item)
+        // No ack in 20s = the server isn't playing (wedged, or a middlebox ate the frame) —
+        // stop pushing; the rest of the backlog waits for the next welcome.
+        let timeout = DispatchWorkItem { [weak self] in self?.pendingDrain.removeAll() }
+        drainTimeout = timeout
+        queue.asyncAfter(deadline: .now() + 20, execute: timeout)
+    }
+
+    private func handleFeedbackAck(_ id: String) {
+        FeedbackOutbox.shared.delete(ids: [id])
+        // Whether this acked a drain item or a live submit, the connection is proven live —
+        // keep the backlog moving.
+        sendNextDrainItem()
     }
 
     private func handleCall(_ c: [String: Any]) {
@@ -402,6 +455,10 @@ private final class Session {
     private func teardown() {
         if claimed, let key = identityKey { client.release(identityKey: key, endpointLabel: endpoint.label) }
         claimed = false
+        acksSupported = false
+        pendingDrain.removeAll()
+        drainTimeout?.cancel()
+        drainTimeout = nil
         // Drop the handler BEFORE cancelling: otherwise the cancel we're about to do reports
         // `.cancelled` straight back into `handleState` and schedules a second retry for the same
         // drop.
