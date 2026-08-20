@@ -38,6 +38,17 @@ final class ReviewModeController {
     /// True while the token is the automatic "what you're looking at" default (refreshed on
     /// every send), false once the user explicitly chose an element (kept until removed).
     private var attachedIsDefault = true
+    /// The window an explicitly chosen element lives in — the shot is pinned to it, so clicking
+    /// another window between choosing and sending can't swap what's captured. nil while the
+    /// token is the default (the shot then follows the reviewed window).
+    private weak var attachedWindow: ElementPath.PlatformWindow?
+
+    /// The last of the app's OWN windows to hold key. Review Mode's bar/compose window takes
+    /// key as soon as the mode turns on, so `keyWindow` stops naming the window under review
+    /// from that moment; this is what `ElementPath.reviewedWindow()` falls back to.
+    private weak var lastKeyWindow: ElementPath.PlatformWindow?
+    static var lastKeyAppWindow: ElementPath.PlatformWindow? { shared.lastKeyWindow }
+    private var keyObserver: NSObjectProtocol?
 
     // MARK: - mode
 
@@ -45,6 +56,8 @@ final class ReviewModeController {
         guard isActive != active else { return }
         isActive = active
         if active {
+            // Before the bar exists — while the app's own key window is still key.
+            startTrackingKeyWindow()
             attachedIsDefault = true
             refreshDefaultElement()
             showBar()
@@ -61,6 +74,8 @@ final class ReviewModeController {
             overlay = nil
             hideBar()
             attachedElement = nil
+            attachedWindow = nil
+            stopTrackingKeyWindow()
         }
         onModeChanged?(active)
     }
@@ -80,6 +95,32 @@ final class ReviewModeController {
             || ReviewOverlay.liveOverlayWindows.contains { $0 === window }
     }
     #endif
+
+    // MARK: - reviewed window
+
+    /// Watch which of the app's own windows holds key, starting from whichever does right now.
+    /// The notification is the only way to keep up: once the bar is up, key ping-pongs between
+    /// it and the window the user clicks back into, and only the latter is the reviewed one.
+    private func startTrackingKeyWindow() {
+        lastKeyWindow = ElementPath.targetWindows().first(where: { $0.isKeyWindow }) ?? lastKeyWindow
+        guard keyObserver == nil else { return }
+        #if canImport(UIKit)
+        let name = UIWindow.didBecomeKeyNotification
+        #else
+        let name = NSWindow.didBecomeKeyNotification
+        #endif
+        keyObserver = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { note in
+            guard let window = note.object as? ElementPath.PlatformWindow,
+                  !ReviewModeController.isReviewWindow(window) else { return }
+            ReviewModeController.shared.lastKeyWindow = window
+        }
+    }
+
+    private func stopTrackingKeyWindow() {
+        if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+        keyObserver = nil
+        lastKeyWindow = nil
+    }
 
     // MARK: - element token
 
@@ -104,6 +145,7 @@ final class ReviewModeController {
             guard let self else { return }
             self.overlay = nil
             self.attachedElement = ElementPath.descriptor(for: chosen)
+            self.attachedWindow = ElementPath.window(of: chosen)
             self.attachedIsDefault = false
             self.barViewController?.setChoosing(false)
             self.pushElementToBar()
@@ -133,9 +175,10 @@ final class ReviewModeController {
         if attachedIsDefault {
             attachedElement = ElementPath.defaultTarget().map(ElementPath.descriptor(for:))
         }
-        // The reviewed window, as the user sees it right now (the bar/overlay are their own
-        // windows, so they're not in the shot).
-        let screenshot = ElementPath.captureWindowPNGBase64()
+        // The reviewed window, as the user sees it right now — the one holding an explicitly
+        // chosen element, else whichever window they're working in. (The bar/overlay are their
+        // own windows, so they're never in the shot.)
+        let screenshot = ElementPath.captureWindowPNGBase64(of: attachedIsDefault ? nil : attachedWindow)
         // Outbox FIRST, wire second: the item is durable the moment the user hits send,
         // whether or not any AgentPad is reachable right now.
         let item = FeedbackOutbox.shared.record(
@@ -143,12 +186,14 @@ final class ReviewModeController {
         onSubmit?(item)
         // Back to the default scope for the next thought.
         attachedIsDefault = true
+        attachedWindow = nil
         refreshDefaultElement()
     }
 
     private func removeElement() {
         // ✕ on the token: this feedback is about the app in general.
         attachedElement = nil
+        attachedWindow = nil
         attachedIsDefault = false
         pushElementToBar()
     }
@@ -196,7 +241,7 @@ final class ReviewModeController {
         panel.layoutIfNeeded()
 
         // Bottom-center of the screen the app's key window is on, just above the Dock.
-        let screen = NSApp?.keyWindow?.screen ?? NSScreen.main
+        let screen = ElementPath.reviewedWindow()?.screen ?? NSScreen.main
         if let screen {
             let size = panel.frame.size
             let visible = screen.visibleFrame       // already excludes Dock + menu bar
