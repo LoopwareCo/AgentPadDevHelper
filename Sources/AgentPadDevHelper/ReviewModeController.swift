@@ -87,6 +87,7 @@ final class ReviewModeController {
     static func isReviewWindow(_ window: UIWindow) -> Bool {
         let c = shared
         return window === c.stripWindow || window === c.composeWindow
+            || FeedbackEntryPoints.isFeedbackWindow(window)   // grab strip / chooser / pending list
             || ReviewOverlay.liveOverlayWindows.contains { $0 === window }
     }
     #else

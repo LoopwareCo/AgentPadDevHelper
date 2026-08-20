@@ -156,44 +156,113 @@ final class FeedbackEntryPoints: NSObject {
     #if canImport(UIKit)
 
     private var windowObserver: NSObjectProtocol?
+    private var sceneObserver: NSObjectProtocol?
     private var alertWindow: UIWindow?
     private var listWindow: UIWindow?
+    /// The transparent tap-catcher over the status-bar band. A recognizer on a NORMAL-level
+    /// window never fired on a real device — UIKit's own status-bar tap handling owns that
+    /// band before window hit-testing — so the entry point owns a window ABOVE the status bar
+    /// instead, exactly the mechanism the review strip already proves out for this region.
+    private var grabWindow: UIWindow?
+    /// One of this type's own windows (the grab strip, the chooser, the pending list)?
+    /// `ElementPath` excludes these from walks/hit-tests the same way it excludes review chrome.
+    static func isFeedbackWindow(_ window: UIWindow) -> Bool {
+        let s = shared
+        return window === s.grabWindow || window === s.alertWindow || window === s.listWindow
+    }
 
     private func installGestures() {
-        attachToVisibleWindows()
-        // New windows (scenes connecting, host app rebuilding its hierarchy) get the
-        // recognizer as they come up.
+        installGrabStrip()
+        // Scenes come and go (and the strip's scene can deactivate) — re-anchor the strip to
+        // the current foreground scene whenever one activates, and when the app's first window
+        // arrives after a cold launch.
+        sceneObserver = NotificationCenter.default.addObserver(
+            forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.installGrabStrip()
+        }
         windowObserver = NotificationCenter.default.addObserver(
-            forName: UIWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] note in
-            guard let window = note.object as? UIWindow else { return }
-            self?.attach(to: window)
+            forName: UIWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.installGrabStrip()
         }
     }
 
-    private func attachToVisibleWindows() {
-        for scene in UIApplication.shared.connectedScenes {
-            guard let windowScene = scene as? UIWindowScene else { continue }
-            for window in windowScene.windows { attach(to: window) }
+    /// (Re)create the grab strip on the current foreground scene. Idempotent; cheap enough to
+    /// run on every scene-activation.
+    private func installGrabStrip() {
+        guard let scene = foregroundScene() else { return }
+        if let grabWindow, grabWindow.windowScene === scene {
+            grabWindow.frame = Self.grabFrame(in: scene)
+            return
+        }
+        grabWindow?.isHidden = true
+        let window = UIWindow(windowScene: scene)
+        // Just BELOW the review strip's `.statusBar + 1`: while Review Mode is up, its strip
+        // (with the + UI Review / Done buttons) wins the band, which is exactly right.
+        window.windowLevel = .statusBar + 0.5
+        window.frame = Self.grabFrame(in: scene)
+        window.backgroundColor = .clear
+        window.rootViewController = GrabStripViewController()
+        window.isHidden = false
+
+        let triple = UITapGestureRecognizer(target: self, action: #selector(statusBarTripleTapped(_:)))
+        triple.numberOfTapsRequired = 3
+        let single = UITapGestureRecognizer(target: self, action: #selector(statusBarSingleTapped(_:)))
+        single.numberOfTapsRequired = 1
+        // The single-tap fires only once a triple can no longer happen, so the forwarded
+        // scroll-to-top below doesn't jump the app mid-triple.
+        single.require(toFail: triple)
+        window.addGestureRecognizer(triple)
+        window.addGestureRecognizer(single)
+        grabWindow = window
+    }
+
+    /// The status-bar band (a 24pt strip even when the bar is hidden — the gesture is the only
+    /// way in on iOS).
+    private static func grabFrame(in scene: UIWindowScene) -> CGRect {
+        let height = max(scene.statusBarManager?.statusBarFrame.height ?? 0, 24)
+        return CGRect(x: 0, y: 0, width: scene.screen.bounds.width, height: height)
+    }
+
+    /// An empty, clear host for the strip window (a window wants a root view controller).
+    private final class GrabStripViewController: UIViewController {
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            view.backgroundColor = .clear
         }
     }
-
-    private func attach(to window: UIWindow) {
-        guard !ReviewModeController.isReviewWindow(window),
-              window !== alertWindow, window !== listWindow,
-              !(window.gestureRecognizers ?? []).contains(where: { $0 is StatusBarTripleTap }) else { return }
-        let tap = StatusBarTripleTap(target: self, action: #selector(statusBarTripleTapped(_:)))
-        tap.numberOfTapsRequired = 3
-        tap.cancelsTouchesInView = false      // never eat the app's own touches
-        tap.delegate = self
-        window.addGestureRecognizer(tap)
-    }
-
-    /// Marker subclass so `attach` can spot an already-installed recognizer.
-    private final class StatusBarTripleTap: UITapGestureRecognizer {}
 
     @objc private func statusBarTripleTapped(_ recognizer: UITapGestureRecognizer) {
         guard recognizer.state == .ended, alertWindow == nil else { return }
         presentChooser()
+    }
+
+    /// Owning the band costs the system's tap-status-bar-to-scroll-to-top; give it back,
+    /// best-effort: a resolved single tap scrolls the frontmost scroll view that opted in,
+    /// like the system would have.
+    @objc private func statusBarSingleTapped(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended,
+              let scene = grabWindow?.windowScene else { return }
+        for window in scene.windows.reversed() where !Self.isFeedbackWindow(window)
+            && !ReviewModeController.isReviewWindow(window) && !window.isHidden {
+            if let scroll = Self.frontmostScrollToTopTarget(in: window) {
+                let top = CGPoint(x: scroll.contentOffset.x,
+                                  y: -scroll.adjustedContentInset.top)
+                scroll.setContentOffset(top, animated: true)
+                return
+            }
+        }
+    }
+
+    private static func frontmostScrollToTopTarget(in root: UIView) -> UIScrollView? {
+        // Depth-first from the topmost subviews, the order hit-testing would consider them.
+        for subview in root.subviews.reversed() where !subview.isHidden && subview.alpha > 0.01 {
+            if let found = frontmostScrollToTopTarget(in: subview) { return found }
+        }
+        if let scroll = root as? UIScrollView, scroll.scrollsToTop, scroll.window != nil,
+           scroll.bounds.height > 100 {   // the app's content, not a picker/strip
+            return scroll
+        }
+        return nil
     }
 
     private func presentChooser() {
@@ -278,24 +347,3 @@ extension FeedbackEntryPoints: NSMenuItemValidation {
 
 #endif
 
-#if canImport(UIKit)
-
-extension FeedbackEntryPoints: UIGestureRecognizerDelegate {
-    /// Only taps that BEGIN in the status-bar strip count, and the recognizer must never
-    /// starve the app's own gestures — recognize alongside everything.
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        guard let window = gestureRecognizer.view as? UIWindow,
-              let statusBar = window.windowScene?.statusBarManager?.statusBarFrame else { return false }
-        // A zero-height frame (status bar hidden) still leaves a grab strip — the gesture is
-        // the only way in on iOS.
-        let grabArea = CGRect(x: 0, y: 0, width: window.bounds.width, height: max(statusBar.height, 24))
-        return grabArea.contains(touch.location(in: window))
-    }
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        true
-    }
-}
-
-#endif
