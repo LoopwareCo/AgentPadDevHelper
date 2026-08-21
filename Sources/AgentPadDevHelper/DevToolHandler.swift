@@ -52,6 +52,25 @@ final class DevToolHandler {
                 let enabled = arguments["enabled"] as? Bool ?? true
                 ReviewModeController.shared.setActive(enabled)
                 completion("ok: review mode \(enabled ? "on" : "off")", false)
+            case "feedback_chooser":
+                // Stands in for the shake, which a Simulator can't perform: CoreMotion has no
+                // accelerometer there. Same chooser, same code path.
+                //
+                // `via: "motion"` takes the long way instead — it posts the very
+                // `UIEventSubtype.motionShake` that Simulator ▸ Device ▸ Shake (⌃⌘Z) does, so it
+                // exercises the responder-chain hook rather than bypassing it. That's the only
+                // way to check that path from a script; simctl cannot shake a device.
+                #if canImport(UIKit)
+                if (arguments["via"] as? String) == "motion" {
+                    UIApplication.shared.motionEnded(.motionShake, with: nil)
+                    completion("ok: posted a motionShake to UIApplication", false)
+                } else {
+                    AgentPadDevHelper.showUIFeedbackChooser()
+                    completion("ok: raised the UI feedback chooser", false)
+                }
+                #else
+                completion("ERROR: feedback_chooser is iOS-only — on macOS use the app's Help ▸ AgentPad menu.", true)
+                #endif
             case "widgets_list":
                 completion(AgentPadDev.shared.widgetsListJSON(), false)
             case "widgets_values":

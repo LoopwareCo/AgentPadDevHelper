@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+- **iOS: shake the device to leave UI feedback — the status-bar triple-tap is gone.** It never
+  worked on a real iPhone. Two shipped attempts at that band failed: a recognizer on the app's
+  key window, then a transparent window of our own above `.statusBar`. The band is arbitrated by
+  the system whatever level a window claims, and on a Dynamic Island phone its middle third is
+  system UI outright. The gesture is now read straight off the accelerometer (`ShakeRecognizer`:
+  three ~2g jolts inside a second, one chooser per shake) — no authorization, no Info.plist key,
+  no touch handling taken away from the host app, and sampling only while the app is
+  foreground-active.
+- **`AgentPadDevHelper.showUIFeedbackChooser()` (iOS).** Raise the same chooser from the host
+  app's own UI — a Settings row, a debug menu.
+- **Simulator ▸ Device ▸ Shake (⌃⌘Z) raises the chooser too.** That menu item moves no
+  accelerometer — it posts a UIKit motion event down the host app's own responder chain — so on
+  a SIMULATOR ONLY the SDK installs `motionEnded(_:with:)` on `UIApplication`, the end of that
+  chain. A host app that handles shakes itself still wins, the original implementation is kept
+  and always called, and nothing of the sort exists in a build for a real device.
+- **`feedback_chooser` driver tool (iOS).** The same chooser over the `ui_*` endpoint, for
+  scripts. `{"via":"motion"}` posts a real `motionShake` instead of calling in directly, which is
+  the only way to check the responder-chain path from a script — `simctl` cannot shake a device.
+- **The review strip's controls moved below the status bar.** Same cause: "+ UI Review" and
+  "Done" sat inside the system-owned band, so they drew correctly and could not be pressed on a
+  device. The strip now spans the band plus a 44pt control row underneath it.
+
 ## 0.9.0 — 2026-08-19
 
 The first resolvable release. (The retired `1.0.0` tag was withdrawn — the package

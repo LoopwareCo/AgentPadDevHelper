@@ -310,10 +310,16 @@ final class ReviewModeController {
             ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         guard let scene else { return }
 
-        let height = max(scene.statusBarManager?.statusBarFrame.height ?? 0, 44)
+        // The band the status bar occupies is NOT the app's to take touches in — the system
+        // arbitrates it, and on a Dynamic Island phone owns its middle outright. So the strip
+        // spans that band (for the gradient) PLUS a 44pt row underneath it, and every control
+        // lives in that row. A strip sized to the status bar alone draws perfectly and can't
+        // be pressed on a real device.
+        let band = scene.statusBarManager?.statusBarFrame.height ?? 0
         let strip = UIWindow(windowScene: scene)
         strip.windowLevel = .statusBar + 1
-        strip.frame = CGRect(x: 0, y: 0, width: scene.screen.bounds.width, height: height)
+        strip.frame = CGRect(x: 0, y: 0, width: scene.screen.bounds.width,
+                             height: band + ReviewStripViewController.controlRowHeight)
         let vc = ReviewStripViewController()
         vc.onCompose = { [weak self] in self?.presentComposer() }
         vc.onDone = { [weak self] in self?.setActive(false) }
@@ -353,9 +359,12 @@ final class ReviewModeController {
     }
 
     /// The status-bar takeover strip — the ONE review-mode chrome, whoever activated the mode
-    /// (AgentPad's `review_mode` call or the app's own triple-tap entry): brand gradient
-    /// covering the status bar, "+ UI Review" in the LEFT corner, "Done" in the RIGHT.
+    /// (AgentPad's `review_mode` call or the app's own shake entry): brand gradient covering the
+    /// status bar and a row below it, "+ UI Review" in the LEFT corner, "Done" in the RIGHT.
     private final class ReviewStripViewController: UIViewController {
+        /// The pressable part, below the system-owned status-bar band.
+        static let controlRowHeight: CGFloat = 44
+
         var onCompose: (() -> Void)?
         var onDone: (() -> Void)?
         private let gradient = CAGradientLayer()
@@ -384,8 +393,9 @@ final class ReviewModeController {
             NSLayoutConstraint.activate([
                 row.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
                 row.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-                // Pin to the strip's bottom so notch/Dynamic-Island screens read it below the cutout.
-                row.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
+                // Centred in the control row the strip adds BELOW the status bar: clear of the
+                // cutout to read, and clear of the system's band to be pressable at all.
+                row.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
                 row.heightAnchor.constraint(equalToConstant: 24),
             ])
         }
