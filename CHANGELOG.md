@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Review Mode's default attachment is the WINDOW, not the view filling it.** Open the composer
+  without choosing anything and the token now reads "Local LLM — window" (the window's title, or
+  the app's name for an untitled one) instead of "NSView": the content view most windows hand
+  back is an anonymous container, so the chip named nothing to the user and the item shipped a
+  one-word `NSView` path to the agent meant to fix it. Choosing an element is unchanged. On iOS
+  the title is the top view controller's, as before.
+
 - **A host app can take the "View & Send" entry point over with its own window.**
   `AgentPadDevHelper.setFeedbackReviewHandler(_:)` re-points the Help-menu item (macOS) / the
   chooser's view action (iOS) at the host, which supplies the item's title and a count of the

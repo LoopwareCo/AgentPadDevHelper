@@ -107,6 +107,31 @@ enum ElementPath {
         return FeedbackElementDescriptor(windowTitle: windowTitle(of: view), path: nodes)
     }
 
+    /// The DEFAULT attachment — the reviewed window itself, not a view inside it.
+    ///
+    /// Feedback typed without choosing anything is about the screen as a whole, and the window
+    /// is the only thing in it the user can name. Attaching the view that fills the window
+    /// instead put a bare `NSView` in the token (most windows' content view is an anonymous
+    /// container), which told neither the user nor the fixing agent anything.
+    static func defaultDescriptor() -> FeedbackElementDescriptor? {
+        guard let window = reviewedWindow() else { return nil }
+        return FeedbackElementDescriptor(windowTitle: title(of: window),
+                                         path: [windowNode(for: window)])
+    }
+
+    /// One window → one wire node. Labelled with the window's title (the app's name when it has
+    /// none), so the token and every card downstream read "Local LLM — window" rather than the
+    /// window class.
+    static func windowNode(for window: PlatformWindow) -> FeedbackElementNode {
+        let size = contentSize(of: window)
+        return FeedbackElementNode(
+            role: "window", className: String(describing: type(of: window)),
+            label: truncated(title(of: window)) ?? UIDriver.appName, value: nil,
+            identifier: identifier(of: window),
+            // The window IS the coordinate space the wire frames are in, so it starts at zero.
+            x: 0, y: 0, w: Double(size.width), h: Double(size.height))
+    }
+
     /// One view → one wire node. Reuses `UIDriver`'s role/label/value vocabulary so the same
     /// element reads the same in a feedback card and a `ui_snapshot`.
     static func node(for v: PlatformView) -> FeedbackElementNode {
@@ -267,27 +292,34 @@ enum ElementPath {
         return windows.last { $0.windowLevel == top }
     }
 
-    /// What the user is looking at when they open the composer without choosing: the reviewed
-    /// window's TOP view controller's view (not the root — a pushed/presented screen is the
-    /// thing on screen).
-    static func defaultTarget() -> UIView? {
-        guard let window = reviewedWindow(),
-              var vc = window.rootViewController else { return nil }
+    /// A window's title. UIWindows have none of their own, so it's the title of the screen the
+    /// user is looking at: the TOP view controller (not the root — a pushed/presented screen is
+    /// the thing on screen).
+    static func title(of window: UIWindow) -> String? {
+        let vc = topViewController(of: window)
+        guard let title = vc?.navigationItem.title ?? vc?.title, !title.isEmpty else { return nil }
+        return title
+    }
+
+    private static func topViewController(of window: UIWindow) -> UIViewController? {
+        guard var vc = window.rootViewController else { return nil }
         while true {
             if let presented = vc.presentedViewController { vc = presented; continue }
             if let nav = vc as? UINavigationController, let top = nav.topViewController { vc = top; continue }
             if let tab = vc as? UITabBarController, let sel = tab.selectedViewController { vc = sel; continue }
             break
         }
-        return vc.viewIfLoaded ?? window
+        return vc
+    }
+
+    private static func contentSize(of window: UIWindow) -> CGSize { window.bounds.size }
+
+    private static func identifier(of window: UIWindow) -> String? {
+        window.accessibilityIdentifier?.isEmpty == false ? window.accessibilityIdentifier : nil
     }
 
     static func windowTitle(of v: UIView) -> String? {
-        guard let window = v.window else { return nil }
-        var vc = window.rootViewController
-        while let presented = vc?.presentedViewController { vc = presented }
-        if let nav = vc as? UINavigationController { vc = nav.topViewController }
-        return vc?.navigationItem.title ?? vc?.title
+        v.window.flatMap(title(of:))
     }
 
     #else
@@ -427,16 +459,23 @@ enum ElementPath {
         return windows.first
     }
 
-    /// What the user is looking at: the reviewed window's content view-controller's view,
-    /// falling back to the content view.
-    static func defaultTarget() -> NSView? {
-        guard let window = reviewedWindow() else { return nil }
-        return window.contentViewController?.view ?? window.contentView
+    static func title(of window: NSWindow) -> String? {
+        window.title.isEmpty ? nil : window.title
+    }
+
+    /// The window's own bounds — the frame view fills it and sits at the origin, so this is the
+    /// coordinate space every wire frame in the descriptor is expressed in.
+    private static func contentSize(of window: NSWindow) -> CGSize {
+        (window.contentView?.superview ?? window.contentView)?.bounds.size ?? window.frame.size
+    }
+
+    private static func identifier(of window: NSWindow) -> String? {
+        guard let id = window.identifier?.rawValue, !id.isEmpty else { return nil }
+        return id
     }
 
     static func windowTitle(of v: NSView) -> String? {
-        guard let title = v.window?.title, !title.isEmpty else { return nil }
-        return title
+        v.window.flatMap(title(of:))
     }
 
     #endif
