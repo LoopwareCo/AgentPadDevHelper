@@ -127,7 +127,7 @@ final class ReviewModeController {
 
     private func refreshDefaultElement() {
         guard attachedIsDefault else { return }
-        attachedElement = ElementPath.defaultTarget().map(ElementPath.descriptor(for:))
+        attachedElement = ElementPath.defaultDescriptor()
         pushElementToBar()
     }
 
@@ -174,7 +174,7 @@ final class ReviewModeController {
         // The default token tracks "what you're looking at", so re-resolve it at the moment of
         // send; an explicit choice is exactly what the user picked, frozen at choose time.
         if attachedIsDefault {
-            attachedElement = ElementPath.defaultTarget().map(ElementPath.descriptor(for:))
+            attachedElement = ElementPath.defaultDescriptor()
         }
         // The reviewed window, as the user sees it right now — the one holding an explicitly
         // chosen element, else whichever window they're working in. (The bar/overlay are their

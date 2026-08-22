@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Review Mode's default attachment is the WINDOW, not the view filling it.** Open the composer
+  without choosing anything and the token now reads "Local LLM — window" (the window's title, or
+  the app's name for an untitled one) instead of "NSView": the content view most windows hand
+  back is an anonymous container, so the chip named nothing to the user and the item shipped a
+  one-word `NSView` path to the agent meant to fix it. Choosing an element is unchanged. On iOS
+  the title is the top view controller's, as before.
+
 - **iOS: shake the device to leave UI feedback — the status-bar triple-tap is gone.** It never
   worked on a real iPhone. Two shipped attempts at that band failed: a recognizer on the app's
   key window, then a transparent window of our own above `.statusBar`. The band is arbitrated by
