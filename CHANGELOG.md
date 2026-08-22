@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **A host app can take the "View & Send" entry point over with its own window.**
+  `AgentPadDevHelper.setFeedbackReviewHandler(_:)` re-points the Help-menu item (macOS) / the
+  chooser's view action (iOS) at the host, which supplies the item's title and a count of the
+  feedback IT holds; everything the SDK's own list does is now reachable from outside the
+  package: `pendingFeedback()` (each item with a ready-made `FeedbackCardModel`),
+  `pendingFeedbackCount()`, `pendingFeedbackDidChange`, `deletePendingFeedback(ids:)`,
+  `pendingFeedbackStatusLine()` and `writeFeedbackArchive(ids:extraSections:fileLabel:)`.
+  `extraSections` is the point: a host ships its OWN kinds of feedback at the top level of the
+  same `.agentpadfeedback` package — written verbatim, never interpreted here, and unable to
+  overwrite the SDK's own keys — so an app with several kinds of feedback still has one review
+  window, one share file, one send.
+
 - **iOS: shake the device to leave UI feedback — the status-bar triple-tap is gone.** It never
   worked on a real iPhone. Two shipped attempts at that band failed: a recognizer on the app's
   key window, then a transparent window of our own above `.statusBar`. The band is arbitrated by

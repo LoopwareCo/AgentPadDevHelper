@@ -33,6 +33,10 @@ final class FeedbackEntryPoints: NSObject {
 
     private(set) var mode: FeedbackCaptureMode = .localOnly
     private var installed = false
+    /// Set by `AgentPadDevHelper.setFeedbackReviewHandler` when the HOST app draws its own
+    /// review window — because it holds kinds of feedback this package knows nothing about. It
+    /// owns the menu item's title and what a click does; the SDK's own list is never raised.
+    var hostReview: AgentPadDevHelper.FeedbackReviewHandler?
 
     /// Idempotent; a later call can only UPGRADE the mode: `start()`'s dial-out beats
     /// everything (that transport reaches every AgentPad), a key beats `.localOnly`.
@@ -128,6 +132,7 @@ final class FeedbackEntryPoints: NSObject {
     }
 
     @objc private func viewPendingTapped() {
+        if let hostReview { hostReview.open(); return }
         if let listWindow {
             listWindow.makeKeyAndOrderFront(nil)
             return
@@ -189,7 +194,7 @@ final class FeedbackEntryPoints: NSObject {
 
     private func presentChooser() {
         guard let scene = foregroundScene() else { return }
-        let count = FeedbackOutbox.shared.count()
+        let count = FeedbackOutbox.shared.count() + (hostReview?.extraCount() ?? 0)
         let alert = UIAlertController(title: "AgentPad UI Feedback", message: nil, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Leave UI Review Feedback", style: .default) { [weak self] _ in
             self?.dismissChooser()
@@ -198,9 +203,9 @@ final class FeedbackEntryPoints: NSObject {
         let view = UIAlertAction(title: count > 0 ? "View Pending Feedback (\(count))"
                                                   : "View Pending Feedback", style: .default) { [weak self] _ in
             self?.dismissChooser()
-            self?.presentList()
+            if let host = self?.hostReview { host.open() } else { self?.presentList() }
         }
-        view.isEnabled = count > 0
+        view.isEnabled = count > 0 || hostReview != nil
         alert.addAction(view)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
             self?.dismissChooser()
@@ -251,7 +256,14 @@ extension FeedbackEntryPoints: NSMenuItemValidation {
             return !ReviewModeController.shared.isActive
         }
         if menuItem === viewItem {
-            let count = FeedbackOutbox.shared.count()
+            let count = FeedbackOutbox.shared.count() + (hostReview?.extraCount() ?? 0)
+            if let hostReview {
+                menuItem.title = hostReview.title(count)
+                // Always enabled, unlike the SDK's own list: the host's window can show feedback
+                // this process hasn't counted yet (a host's own store may be a network away), and
+                // greying the item out on a stale zero would be a lie.
+                return true
+            }
             menuItem.title = title(forPendingCount: count)
             return count > 0
         }
