@@ -303,11 +303,19 @@ final class ReviewBarViewController: UIViewController, UITextFieldDelegate {
         NSLayoutConstraint.activate([
             card.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             card.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            // The card's BOX still reaches the bottom of the screen — what rides the keyboard is
+            // its content. With the keyboard up the lower part is simply hidden behind it, so the
+            // card can't leave a strip of dimmed backdrop under itself as it moves.
             card.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
             stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
             stack.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
-            stack.bottomAnchor.constraint(equalTo: card.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            // The compose row must stay visible while you type in it, so the content is pinned to
+            // the KEYBOARD, not to the card's safe area: `keyboardLayoutGuide` (iOS 15, this
+            // package's floor) sits at the safe-area bottom while the keyboard is away — i.e.
+            // exactly where this used to be — and rises with it, animating in step because UIKit
+            // moves the guide inside the keyboard's own animation.
+            stack.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -12),
         ])
         setChoosing(false)
         refreshSendEnabled()
@@ -343,9 +351,29 @@ final class ReviewBarViewController: UIViewController, UITextFieldDelegate {
 
     @objc private func backdropTapped(_ g: UITapGestureRecognizer) {
         guard !card.frame.contains(g.location(in: view)) else { return }
-        choosing ? onCancelChoose?() : onDone?()
+        leave()
     }
-    @objc private func doneTapped() { choosing ? onCancelChoose?() : onDone?() }
+    @objc private func doneTapped() { leave() }
+
+    /// Both ways out of the composer. While CHOOSING, "Done" reads Cancel and only backs out of
+    /// the picker — the message survives, so there's nothing to ask about. Otherwise leaving
+    /// throws away whatever is in the field, so a non-empty field asks first: on a phone the two
+    /// exits are a tap on the backdrop and a tap on Done, both easy to hit by accident.
+    private func leave() {
+        guard !choosing else { onCancelChoose?(); return }
+        guard !trimmedMessage.isEmpty else { onDone?(); return }
+        let alert = UIAlertController(title: "Discard this feedback?",
+                                      message: "You haven't sent what you wrote.",
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Keep Editing", style: .cancel) { [weak self] _ in
+            self?.field.becomeFirstResponder()
+        })
+        alert.addAction(UIAlertAction(title: "Discard", style: .destructive) { [weak self] _ in
+            self?.field.text = ""
+            self?.onDone?()
+        })
+        present(alert, animated: true)
+    }
     @objc private func chooseTapped() { onChooseUI?() }
     @objc private func removeElementTapped() { onRemoveElement?() }
     @objc private func sendTapped() {
