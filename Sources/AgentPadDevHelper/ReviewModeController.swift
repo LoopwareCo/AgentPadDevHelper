@@ -61,7 +61,7 @@ final class ReviewModeController {
             attachedIsDefault = true
             refreshDefaultElement()
             showBar()
-            guard barIsVisible else {
+            guard barIsHosted else {
                 // A windowless process (the widgets-only sample, a CLI tool) can't host the
                 // bar. Report NOT active so the server reverts its optimistic flip instead of
                 // wedging "reviewing" on an app with no way to compose.
@@ -213,8 +213,18 @@ final class ReviewModeController {
 
     private var barPanel: NSPanel?
     private var barViewController: ReviewBarViewController?
+    /// Whether the bar is meant to be on screen right now (`NSApp.isActive`). Kept apart from
+    /// `panel.isVisible`, which lags behind a fade-out still in flight.
+    private var barShown = false
+    /// False until the bar has been revealed once — the first reveal is what places it and
+    /// takes the composer's focus, whether that happens immediately or when the app comes
+    /// forward later.
+    private var barRevealedOnce = false
+    private var activationObservers: [NSObjectProtocol] = []
 
-    private var barIsVisible: Bool { barPanel != nil }
+    /// The bar exists (the process can host it) — NOT that it's on screen; it spends the whole
+    /// time the app is in the background created but ordered out.
+    private var barIsHosted: Bool { barPanel != nil }
 
     private func showBar() {
         guard barPanel == nil, NSApp != nil else { return }
@@ -237,34 +247,30 @@ final class ReviewModeController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = true
+        // We hide/show it ourselves rather than letting AppKit do it: the bar also has to stay
+        // away when the mode is turned ON from AgentPad, which is the frontmost app at that
+        // moment — a window AppKit never hid is a window it won't restore.
         panel.hidesOnDeactivate = false
         panel.contentViewController = bar
         panel.layoutIfNeeded()
-
-        // Bottom-center of the screen the app's key window is on, just above the Dock.
-        let screen = ElementPath.reviewedWindow()?.screen ?? NSScreen.main
-        if let screen {
-            let size = panel.frame.size
-            let visible = screen.visibleFrame       // already excludes Dock + menu bar
-            panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2,
-                                         y: visible.minY + 16))
-        }
         panel.alphaValue = 0
-        panel.orderFrontRegardless()
         barPanel = panel
         barViewController = bar
+        barShown = false
+        barRevealedOnce = false
         pushElementToBar()
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.18
-            panel.animator().alphaValue = 1
-        }
-        focusComposer()
+        startTrackingAppActivation()
+        // Reveals with a fade if the app is frontmost right now; otherwise it waits, ordered out,
+        // for the app to come forward.
+        syncBarVisibility(animated: true)
     }
 
     private func hideBar() {
+        stopTrackingAppActivation()
         guard let panel = barPanel else { return }
         barPanel = nil
         barViewController = nil
+        barShown = false
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.15
             panel.animator().alphaValue = 0
@@ -273,8 +279,84 @@ final class ReviewModeController {
         })
     }
 
-    private func focusComposer() {
+    // MARK: - following the app to the front
+
+    /// The bar is chrome for ONE app — the one being reviewed — so it belongs on screen only
+    /// while that app is frontmost. Floating at `.statusBar` level over whatever the user
+    /// switched to (AgentPad included) is just clutter, and it can't say anything useful about
+    /// a window the user isn't looking at. Review Mode itself stays on throughout: the bar
+    /// comes straight back, in place, when the app returns.
+    private func startTrackingAppActivation() {
+        guard activationObservers.isEmpty else { return }
+        let center = NotificationCenter.default
+        activationObservers = [NSApplication.didBecomeActiveNotification,
+                               NSApplication.didResignActiveNotification].map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { _ in
+                ReviewModeController.shared.syncBarVisibility(animated: true)
+            }
+        }
+    }
+
+    private func stopTrackingAppActivation() {
+        for observer in activationObservers { NotificationCenter.default.removeObserver(observer) }
+        activationObservers = []
+    }
+
+    private func syncBarVisibility(animated: Bool) {
         guard let panel = barPanel else { return }
+        let shouldShow = NSApp?.isActive ?? false
+        guard shouldShow != barShown else { return }
+        barShown = shouldShow
+        if shouldShow {
+            let firstReveal = !barRevealedOnce
+            if firstReveal {
+                barRevealedOnce = true
+                placeBar(panel)
+            }
+            panel.orderFrontRegardless()
+            fadeBar(panel, to: 1, duration: animated ? 0.18 : 0)
+            // Only the first reveal takes focus. On every later one the app came forward
+            // because the user clicked one of ITS windows (or ⌘-tabbed to it) — pulling key
+            // over to the composer would fight the click they just made.
+            if firstReveal { focusComposer() }
+        } else {
+            // Choosing is a hit-test layer over the app's own windows with no visible way out
+            // once the bar is gone; drop back to composing so the returning bar is coherent.
+            cancelChoosing()
+            fadeBar(panel, to: 0, duration: animated ? 0.15 : 0) { [weak self] in
+                // A fast switch away and back can re-show the bar mid-fade — leave it alone then.
+                guard let self, !self.barShown, self.barPanel === panel else { return }
+                panel.orderOut(nil)
+            }
+        }
+    }
+
+    /// Bottom-center of the screen the reviewed window is on, just above the Dock. Done at the
+    /// first reveal, not at creation: the mode is usually switched on from AgentPad, and the
+    /// screen worth centering on is the one the user has the app open on. Never repeated —
+    /// the bar is draggable, and where the user put it is where it belongs.
+    private func placeBar(_ panel: NSPanel) {
+        guard let screen = ElementPath.reviewedWindow()?.screen ?? NSScreen.main else { return }
+        let size = panel.frame.size
+        let visible = screen.visibleFrame          // already excludes Dock + menu bar
+        panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 16))
+    }
+
+    private func fadeBar(_ panel: NSPanel, to alpha: CGFloat, duration: TimeInterval,
+                         completion: (() -> Void)? = nil) {
+        guard duration > 0 else {
+            panel.alphaValue = alpha
+            completion?()
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = duration
+            panel.animator().alphaValue = alpha
+        }, completionHandler: completion)
+    }
+
+    private func focusComposer() {
+        guard let panel = barPanel, barShown else { return }
         panel.makeKey()
         barViewController?.focusField()
     }
@@ -293,7 +375,7 @@ final class ReviewModeController {
     private var composeWindow: UIWindow?
     private var barViewController: ReviewBarViewController?
 
-    private var barIsVisible: Bool { stripWindow != nil }
+    private var barIsHosted: Bool { stripWindow != nil }
 
     /// The AgentPad icon's background gradient (sampled from the shipped 1024pt icon):
     /// #53A3FF at the top → #9B4FFF at the bottom.

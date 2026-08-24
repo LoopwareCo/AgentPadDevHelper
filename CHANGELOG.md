@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **macOS: the Review Mode bar follows the app it belongs to.** It's chrome for ONE app, so it's
+  on screen only while that app is frontmost: it hides when the user switches away (including
+  the moment the mode is switched on from AgentPad, which is frontmost then) and fades back,
+  where they left it, when the app returns. Review Mode itself is untouched by this — the
+  server's picture stays "reviewing" throughout, and only Done ends it. Choosing is cancelled on
+  the way out, since the hit-test overlay would otherwise be left with no visible way to exit.
+
 - **Review Mode's default attachment is the WINDOW, not the view filling it.** Open the composer
   without choosing anything and the token now reads "Local LLM — window" (the window's title, or
   the app's name for an untitled one) instead of "NSView": the content view most windows hand
