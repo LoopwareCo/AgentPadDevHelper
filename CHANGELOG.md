@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **macOS: an app with no icon of its own now reports no icon, instead of the system's.** macOS has
+  no "this app has no icon" answer — `NSApplication.applicationIconImage` hands back the generic app
+  artwork — so the SDK was telling the server that placeholder WAS the app. It now checks its own
+  bundle first (a `CFBundleIconName` asset or a `CFBundleIconFile(s)` resource that actually
+  resolves; a key pointing at artwork that was removed doesn't count) and omits `iconPNG` otherwise.
+  Such an app shows AgentPad's platform glyph rather than a grey square, and — the reason it
+  matters — no longer lends that square to the PROJECT it's running in, where the same placeholder
+  every iconless app produces would afterwards read like an icon somebody chose. iOS was already
+  correct: with no `AppIcon`, there was never an icon to send.
+
 - **macOS: the Review Mode bar follows the app it belongs to.** It's chrome for ONE app, so it's
   on screen only while that app is frontmost: it hides when the user switches away (including
   the moment the mode is switched on from AgentPad, which is frontmost then) and fades back,

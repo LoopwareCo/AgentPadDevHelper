@@ -144,6 +144,39 @@ enum AppIdentity {
         if Thread.isMainThread { render() } else { DispatchQueue.main.async(execute: render) }
     }
 
+    #if !canImport(UIKit) && canImport(AppKit)
+    /// Whether THIS bundle carries an icon of its own.
+    ///
+    /// macOS never answers "no icon" for an app: `applicationIconImage` hands back the system's
+    /// generic app icon, which looks like real artwork to everything downstream. Only the bundle
+    /// knows — the icon keys it declares, and whether they still resolve to something.
+    ///
+    /// Worth answering here rather than letting the placeholder travel, because AgentPad lends a
+    /// connected app's icon to the PROJECT it is running in: that stand-in is byte-for-byte the same
+    /// for every iconless app, so lending it says nothing about the project while reading, ever
+    /// after, like an icon somebody chose. Deciding it in the app is metadata and stays true; the
+    /// only other place to decide it is the viewer, comparing pixels against a system icon that is
+    /// redrawn with every macOS release.
+    private static var declaresOwnIcon: Bool {
+        declaresOwnIcon(info: Bundle.main.infoDictionary ?? [:],
+                        asset: { NSImage(named: $0) != nil },
+                        resource: { Bundle.main.url(forResource: $0, withExtension: "icns") != nil
+                                 || Bundle.main.url(forResource: $0, withExtension: nil) != nil })
+    }
+
+    /// The rule itself, over a bundle's Info.plist. `asset` answers whether an asset-catalog image
+    /// of that name exists (`CFBundleIconName`, what Xcode writes), `resource` whether a named icon
+    /// FILE does (`CFBundleIconFile(s)`, hand-built bundles) — both resolved rather than trusted, so
+    /// a key left pointing at artwork that was removed doesn't count as an icon.
+    static func declaresOwnIcon(info: [String: Any],
+                                asset: (String) -> Bool, resource: (String) -> Bool) -> Bool {
+        if let name = info["CFBundleIconName"] as? String, !name.isEmpty, asset(name) { return true }
+        let single = (info["CFBundleIconFile"] as? String).map { [$0] } ?? []
+        let listed = info["CFBundleIconFiles"] as? [String] ?? []
+        return (single + listed).contains { !$0.isEmpty && resource($0) }
+    }
+    #endif
+
     /// Draw the app icon into a 128×128 PNG. Main thread.
     private static func renderIconPNG() -> Data? {
         let side = 128
@@ -162,6 +195,8 @@ enum AppIdentity {
             .image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
             .pngData()
         #elseif canImport(AppKit)
+        // An app that ships no artwork must report NO icon, not the system's stand-in for one.
+        guard declaresOwnIcon else { return nil }
         let image = NSApplication.shared.applicationIconImage
             ?? NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
         guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side,
