@@ -167,13 +167,13 @@ final class ReviewOverlay {
 /// Full-screen choosing overlay: press-and-hold shows the rect over the element under the
 /// finger (hit-testing the app's own windows, never ours), drag refines, release commits.
 private final class ReviewOverlayViewController: UIViewController {
-    var onPickView: ((UIView) -> Void)?
+    var onPick: ((ElementPath.ChosenElement) -> Void)?
     var onCancel: (() -> Void)?
 
     private let highlight = UIView()
     private let tag = UILabel()
     private let hint = UILabel()
-    private var current: UIView?
+    private var current: ElementPath.ChosenElement?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -226,7 +226,7 @@ private final class ReviewOverlayViewController: UIViewController {
         case .began, .changed:
             update(at: g.location(in: view))
         case .ended:
-            if let current { onPickView?(current) } else { onCancel?() }
+            if let current { onPick?(current) } else { onCancel?() }
         case .cancelled, .failed:
             onCancel?()
         default:
@@ -239,13 +239,13 @@ private final class ReviewOverlayViewController: UIViewController {
         // Highest app window whose hit-test answers wins (targetWindows is level-sorted low→high).
         for target in ElementPath.targetWindows().reversed() {
             let point = overlayWindow.convert(pointInOverlay, to: target)
-            guard let hit = ElementPath.hitTest(at: point, in: target) else { continue }
+            guard let hit = ElementPath.hitTestElement(at: point, in: target) else { continue }
             current = hit
             let frame = ElementPath.frameInWindow(of: hit).map { target.convert($0, to: overlayWindow) }
                 ?? .zero
             highlight.frame = view.convert(frame, from: nil)
             highlight.isHidden = false
-            tag.text = "  " + ElementPath.displayName(for: ElementPath.node(for: hit)) + "  "
+            tag.text = "  " + ElementPath.displayName(for: ElementPath.leafNode(for: hit)) + "  "
             tag.sizeToFit()
             var origin = CGPoint(x: highlight.frame.minX, y: highlight.frame.minY - tag.bounds.height - 4)
             if origin.y < view.safeAreaInsets.top { origin.y = highlight.frame.minY + 4 }
@@ -275,7 +275,7 @@ final class ReviewOverlay {
             ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         guard let scene else { return }
         let vc = ReviewOverlayViewController()
-        vc.onPickView = { [weak self] view in self?.finish { $0.onPickElement?(.view(view)) } }
+        vc.onPick = { [weak self] chosen in self?.finish { $0.onPickElement?(chosen) } }
         vc.onCancel = { [weak self] in self?.finish { $0.onCancel?() } }
         let w = UIWindow(windowScene: scene)
         w.windowLevel = .alert + 10

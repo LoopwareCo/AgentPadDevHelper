@@ -180,6 +180,7 @@ extension UIDriver {
     }
 
     func rootElements() -> [AnyObject] {
+        AXBridge.materializeIfNeeded()   // SwiftUI AX nodes before any walk (a no-op today, see it)
         var windows = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap { $0.windows }
@@ -198,16 +199,46 @@ extension UIDriver {
         // subviews to avoid non-actionable duplicates).
         if let nav = obj as? UINavigationBar, let top = nav.items?.last {
             let items = (top.leftBarButtonItems ?? []) + (top.rightBarButtonItems ?? [])
-            return items + (nav.subviews.filter { !Self.isBarButtonInternal($0) } as [AnyObject])
+            return items + (nav.subviews.filter(Self.keepsInWalk) as [AnyObject])
         }
-        // Drop the private bar-button container/control subtrees everywhere — they're duplicates of
-        // the actionable UIBarButtonItem nodes.
-        return ((obj as? UIView)?.subviews ?? []).filter { !Self.isBarButtonInternal($0) }
+        guard let v = obj as? UIView else {
+            // An AX-only element (SwiftUI AccessibilityNode): descend through its own AX children.
+            // Views are excluded — anything view-backed is reached by the view walk.
+            return obj is UIBarButtonItem ? [] : AXBridge.elementChildren(of: obj)
+        }
+        // The Back platter's control is the whole button: its visual-provider subviews carry the
+        // button trait but no action, and would read as a second, dead "button".
+        if Self.isUnrepresentedBarButton(v) { return [] }
+        var kids: [AnyObject] = v.subviews.filter(Self.keepsInWalk)
+        // SwiftUI hosting views draw their controls without any UIView behind them; the elements
+        // live only on the (materialized) AX layer, so graft those in as extra children.
+        if AXBridge.isGraftPoint(v) { kids += AXBridge.elementChildren(of: v) }
+        return kids
+    }
+
+    /// Drop the private bar-button container/control subtrees everywhere — they're duplicates of
+    /// the actionable UIBarButtonItem nodes — EXCEPT a bar button no synthesized item stands for.
+    private static func keepsInWalk(_ v: UIView) -> Bool {
+        !isBarButtonInternal(v) || isUnrepresentedBarButton(v)
+    }
+
+    /// A private bar-button CONTROL (`_UIButtonBarButton`) whose `UIBarButtonItem` is not among
+    /// the navigation item's left/right items — on iOS 26 that is the Back button, which lives
+    /// inside the SwiftUI-rendered platter (`NavigationButtonBar.ItemWrapperView`) and is backed by
+    /// an internal item the walk never synthesizes. It's a real `UIControl`, so it's driven like
+    /// one; it just must not be filtered away with the duplicates.
+    static func isUnrepresentedBarButton(_ v: UIView) -> Bool {
+        guard v is UIControl, String(describing: type(of: v)).contains("ButtonBarButton") else { return false }
+        guard let nav = sequence(first: v.superview, next: { $0?.superview }).compactMap({ $0 as? UINavigationBar }).first,
+              let top = nav.items?.last else { return true }
+        let represented = ((top.leftBarButtonItems ?? []) + (top.rightBarButtonItems ?? []))
+            .compactMap { $0.value(forKey: "view") as? UIView }
+        return !represented.contains { $0 === v }
     }
 
     func isVisible(_ obj: AnyObject) -> Bool {
         if obj is UIBarButtonItem { return true }
-        guard let v = obj as? UIView else { return false }
+        guard let v = obj as? UIView else { return true }   // AX elements are walked as-is
         return !v.isHidden && v.alpha > 0.01
     }
 
@@ -216,7 +247,7 @@ extension UIDriver {
             return UINode(ref: ref, role: "button", label: Self.barLabel(item), value: nil,
                           identifier: item.accessibilityIdentifier, enabled: item.isEnabled, actions: ["activate"])
         }
-        let v = obj as! UIView
+        guard let v = obj as? UIView else { return AXBridge.node(for: obj, ref: ref) }
         let center = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil)
         return UINode(ref: ref, role: Self.role(v), label: Self.label(v), value: Self.value(v),
                       identifier: v.accessibilityIdentifier?.isEmpty == false ? v.accessibilityIdentifier : nil,
@@ -230,7 +261,8 @@ extension UIDriver {
             guard let action = item.action else { return false }
             return UIApplication.shared.sendAction(action, to: item.target, from: item, for: nil)
         }
-        guard let v = obj as? UIView else { return false }
+        // AX-only elements (SwiftUI controls, iOS 26 nav-bar platter items) are driven on the AX layer.
+        guard let v = obj as? UIView else { return AXBridge.perform(obj, action: action) }
         // Table/collection cells: route through the real selection delegate.
         if let cell = v as? UITableViewCell, let table = cell.ap_enclosingTableView, let ip = table.indexPath(for: cell) {
             table.selectRow(at: ip, animated: false, scrollPosition: .none)
@@ -254,6 +286,22 @@ extension UIDriver {
                         unsafeBitCast(block as AnyObject, to: Handler.self)(action)
                     }
                 }
+                return true
+            }
+        }
+        // The Back platter (`_UIButtonBarButton`, see isUnrepresentedBarButton): its AX activate
+        // only works once UIKit's accessibility bundle is loaded, and its touch-up actions are
+        // internal, so pop the way the button does. A controller-managed bar must be popped
+        // through its UINavigationController (popping the bar directly raises), a bare bar
+        // through the bar itself.
+        if Self.isUnrepresentedBarButton(v) {
+            if v.accessibilityActivate() { return true }
+            if let nav = sequence(first: v.superview, next: { $0?.superview }).compactMap({ $0 as? UINavigationBar }).first,
+               nav.backItem != nil {
+                if let controller = nav.delegate as? UINavigationController {
+                    return controller.popViewController(animated: true) != nil
+                }
+                nav.popItem(animated: true)
                 return true
             }
         }
@@ -300,6 +348,8 @@ extension UIDriver {
     }
 
     func assign(_ obj: AnyObject, text: String) -> Bool {
+        // AX-only elements (SwiftUI text fields): the AX value setter is the only input path.
+        if !(obj is UIView) { return AXBridge.setValue(obj, text: text) }
         if let tf = obj as? UITextField { tf.text = text; tf.sendActions(for: .editingChanged); return true }
         if let tv = obj as? UITextView { tv.text = text; tv.delegate?.textViewDidChange?(tv); return true }
         return false
@@ -317,13 +367,19 @@ extension UIDriver {
         case is UICollectionView: return "collection"
         case is UIImageView: return "image"
         case is UINavigationBar: return "navBar"
-        case is UIControl: return "control"
+        // A private control that calls itself a button on the AX layer, or IS the nav bar's
+        // Back platter (`_UIButtonBarButton`), reads as one — not as an anonymous "control".
+        case is UIControl:
+            return v.accessibilityTraits.contains(.button) || isUnrepresentedBarButton(v) ? "button" : "control"
         default: return String(describing: type(of: v))
         }
     }
     static func label(_ v: UIView) -> String? {
         if let nav = v as? UINavigationBar { return nav.topItem?.title ?? v.accessibilityLabel }
         if let l = v.accessibilityLabel, !l.isEmpty { return l }
+        // The iOS 26 Back platter carries no label of its own (VoiceOver names it through the
+        // navigation bar), so it is named here — it's the only bar button the item walk can't.
+        if isUnrepresentedBarButton(v) { return "Back" }
         if let b = v as? UIButton { return b.currentTitle ?? b.titleLabel?.text }
         if let l = v as? UILabel { return l.text }
         if let tf = v as? UITextField { return tf.placeholder }
@@ -344,10 +400,12 @@ extension UIDriver {
         return n.contains("ButtonBar") || n.contains("BarButton")
     }
     static func value(_ v: UIView) -> String? {
+        // Before the AX value: once UIKit's accessibility bundle is loaded (AXBridge) a switch's
+        // accessibilityValue is "1"/"0", and the walk's output must not change with it.
+        if let sw = v as? UISwitch { return sw.isOn ? "on" : "off" }
         if let val = v.accessibilityValue, !val.isEmpty { return val }
         if let tf = v as? UITextField { return tf.text }
         if let tv = v as? UITextView { return tv.text }
-        if let sw = v as? UISwitch { return sw.isOn ? "on" : "off" }
         return nil
     }
     private static func actions(_ v: UIView) -> [String] {

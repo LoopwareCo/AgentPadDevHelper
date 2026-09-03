@@ -80,14 +80,13 @@ enum ElementPath {
     typealias PlatformWindow = NSWindow
     #endif
 
-    /// What Choose UI can land on: a real platform view, or (macOS) an AX-only element inside a
-    /// SwiftUI hosting view — SwiftUI draws into one `NSHostingView`, so the view walk bottoms
-    /// out there and the `AXBridge` node tree is the only route to the elements the user sees.
+    /// What Choose UI can land on: a real platform view, or an AX-only element inside a SwiftUI
+    /// hosting view — SwiftUI draws into one `NSHostingView`/`UIHostingView`, so the view walk
+    /// bottoms out there and the `AXBridge` node tree is the only route to the elements the user
+    /// sees. `host` is the hosting view the element hangs off (its window is the element's).
     enum ChosenElement {
         case view(PlatformView)
-        #if !canImport(UIKit) && canImport(AppKit)
-        case axElement(AnyObject, host: NSView)
-        #endif
+        case axElement(AnyObject, host: PlatformView)
     }
 
     /// The full descriptor for one chosen view: its window's title plus every ancestor from the
@@ -175,7 +174,6 @@ enum ElementPath {
         switch chosen {
         case .view(let view):
             return descriptor(for: view)
-        #if !canImport(UIKit) && canImport(AppKit)
         case .axElement(let element, let host):
             // The view chain down to (and including) the hosting view, then the AX chain from
             // the hosting view down to the chosen SwiftUI element.
@@ -186,7 +184,6 @@ enum ElementPath {
                 base.path = Array(base.path.prefix(6)) + Array(base.path.suffix(maxNodes - 6))
             }
             return base
-        #endif
         }
     }
 
@@ -195,10 +192,8 @@ enum ElementPath {
         switch chosen {
         case .view(let view):
             return node(for: view)
-        #if !canImport(UIKit) && canImport(AppKit)
         case .axElement(let element, let host):
             return axNode(for: element, in: host.window)
-        #endif
         }
     }
 
@@ -207,10 +202,8 @@ enum ElementPath {
         switch chosen {
         case .view(let view):
             return frameInWindow(of: view)
-        #if !canImport(UIKit) && canImport(AppKit)
         case .axElement(let element, let host):
             return axFrameInWindow(of: element, in: host.window)
-        #endif
         }
     }
 
@@ -220,10 +213,8 @@ enum ElementPath {
         switch chosen {
         case .view(let view):
             return view.window
-        #if !canImport(UIKit) && canImport(AppKit)
         case .axElement(_, let host):
             return host.window
-        #endif
         }
     }
 
@@ -265,6 +256,70 @@ enum ElementPath {
     /// that can, which is what the user means anyway).
     static func hitTest(at point: CGPoint, in window: UIWindow) -> UIView? {
         window.hitTest(point, with: nil) ?? window.rootViewController?.view
+    }
+
+    /// The chosen element under `point`: the deepest view — and, when that view (or an ancestor)
+    /// is a SwiftUI hosting view with AX-only content, the deepest AX element under the point
+    /// instead (the view walk bottoms out at the hosting view; the `AXBridge` node tree is what
+    /// the user actually sees).
+    static func hitTestElement(at point: CGPoint, in window: UIWindow) -> ChosenElement? {
+        guard let view = hitTest(at: point, in: window) else { return nil }
+        AXBridge.materializeIfNeeded()
+        guard let host = sequence(first: view, next: { $0.superview })
+            .first(where: { AXBridge.isGraftPoint($0) && !AXBridge.elementChildren(of: $0).isEmpty }) else {
+            return .view(view)
+        }
+        if let element = deepestAXElement(under: point, from: host, in: window) {
+            return .axElement(element, host: host)
+        }
+        return .view(view)
+    }
+
+    /// Depth-first descent of the AX-only children, keeping the deepest element whose frame
+    /// (in window coordinates) contains the point.
+    private static func deepestAXElement(under point: CGPoint, from root: AnyObject, in window: UIWindow) -> AnyObject? {
+        var best: AnyObject?
+        func descend(_ node: AnyObject, depth: Int) {
+            guard depth < 40 else { return }
+            for child in AXBridge.elementChildren(of: node) {
+                guard let frame = AXBridge.frameInWindow(of: child, in: window), frame.contains(point) else { continue }
+                best = child
+                descend(child, depth: depth + 1)
+            }
+        }
+        descend(root, depth: 0)
+        return best
+    }
+
+    /// The AX chain from the hosting view DOWN to `element` (host excluded, element included) —
+    /// built by walking `accessibilityContainer` up until a real view appears, then reversing.
+    private static func axChain(from element: AnyObject, to host: UIView) -> [AnyObject] {
+        var chain: [AnyObject] = []
+        var cursor: AnyObject? = element
+        var hops = 0
+        while let node = cursor, !(node is UIView), hops < 40 {
+            chain.append(node)
+            cursor = AXBridge.parent(of: node)
+            hops += 1
+        }
+        return chain.reversed()
+    }
+
+    /// A wire node for an AX-only element: the bridge's role vocabulary, the element's class as
+    /// the "class name", and its frame in the host window's coordinates.
+    private static func axNode(for element: AnyObject, in window: UIWindow?) -> FeedbackElementNode {
+        let role = AXBridge.role(element)
+        let frame = axFrameInWindow(of: element, in: window)
+        return FeedbackElementNode(
+            role: role, className: String(describing: type(of: element)),
+            label: AXBridge.label(element), value: AXBridge.value(element, role: role),
+            identifier: AXBridge.identifier(element),
+            x: frame.map { Double($0.origin.x) }, y: frame.map { Double($0.origin.y) },
+            w: frame.map { Double($0.width) }, h: frame.map { Double($0.height) })
+    }
+
+    private static func axFrameInWindow(of element: AnyObject, in window: UIWindow?) -> CGRect? {
+        AXBridge.frameInWindow(of: element, in: window)
     }
 
     /// Every window Review Mode may choose from — the app's own visible windows, never ours.

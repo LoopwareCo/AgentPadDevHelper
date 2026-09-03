@@ -1,11 +1,73 @@
 import Foundation
 
+/// In-process bridge to the surfaces the platform view walk can't see: SwiftUI content, and the
+/// SwiftUI-rendered internals of native chrome (macOS 26+ toolbar items, iOS 26+ navigation-bar
+/// platters). The AppKit half lives below; the UIKit half is `AXBridgeUIKit.swift`. Both share
+/// this pure core so the two walks agree on roles and on WHERE AX-only elements may be grafted.
+enum AXBridge {
+    /// Platform-neutral copy of the UIAccessibility trait bits the driver keys on. UIKit's
+    /// `UIAccessibilityTraits` is only available where UIKit is, so the iOS bridge translates into
+    /// this set and the mapping rules (and their tests) compile everywhere.
+    struct TraitFlags: OptionSet, Hashable {
+        let rawValue: UInt32
+        static let button = TraitFlags(rawValue: 1 << 0)
+        static let link = TraitFlags(rawValue: 1 << 1)
+        static let image = TraitFlags(rawValue: 1 << 2)
+        static let selected = TraitFlags(rawValue: 1 << 3)
+        static let staticText = TraitFlags(rawValue: 1 << 4)
+        static let notEnabled = TraitFlags(rawValue: 1 << 5)
+        static let searchField = TraitFlags(rawValue: 1 << 6)
+        static let adjustable = TraitFlags(rawValue: 1 << 7)
+        static let header = TraitFlags(rawValue: 1 << 8)
+        static let keyboardKey = TraitFlags(rawValue: 1 << 9)
+        static let tabBar = TraitFlags(rawValue: 1 << 10)
+        static let toggleButton = TraitFlags(rawValue: 1 << 11)
+    }
+
+    /// Map UIAccessibility traits onto the driver's small shared role vocabulary (UINode.role).
+    /// Most specific first: a SwiftUI Toggle carries `button` AND `toggleButton` and must read as a
+    /// switch; a slider is `adjustable` (never `button`); a search field is a text field the
+    /// caller can `ui_setvalue`. nil when the traits say nothing about what the element is.
+    static func genericRole(traits: TraitFlags) -> String? {
+        if traits.contains(.toggleButton) { return "switch" }
+        if traits.contains(.adjustable) { return "slider" }
+        if traits.contains(.searchField) { return "textField" }
+        if traits.contains(.button) || traits.contains(.keyboardKey) { return "button" }
+        if traits.contains(.link) { return "link" }
+        if traits.contains(.image) { return "image" }
+        if traits.contains(.staticText) || traits.contains(.header) { return "text" }
+        if traits.contains(.tabBar) { return "tabBar" }
+        return nil
+    }
+
+    /// Traits that make an element pressable through `accessibilityActivate()`.
+    static func isPressable(traits: TraitFlags) -> Bool {
+        !traits.isDisjoint(with: [.button, .link, .keyboardKey, .toggleButton])
+    }
+
+    /// The UIKit graft rule — where AX-only elements may be appended to the view walk. A view that
+    /// is a real control, or is itself ONE accessibility element, is already fully represented by
+    /// its own node; grafting its AX elements under it would list the same thing twice (the Mac's
+    /// "don't graft inside real controls" rule, phrased for UIKit). Containers — hosting views,
+    /// platter hosts, plain UIViews — are the only graft points.
+    static func isGraftPoint(isControl: Bool, isAccessibilityElement: Bool) -> Bool {
+        !isControl && !isAccessibilityElement
+    }
+
+    /// Normalise the on/off values UIKit and SwiftUI hand back for toggles ("1"/"0", "On"/"Off")
+    /// to the view backend's "on"/"off" so a SwiftUI Toggle and a UISwitch read the same.
+    static func toggleValue(_ raw: String) -> String {
+        switch raw.lowercased() {
+        case "1", "on", "true", "checked": return "on"
+        case "0", "off", "false", "unchecked": return "off"
+        default: return raw
+        }
+    }
+}
+
 #if !canImport(UIKit) && canImport(AppKit)
 import AppKit
 
-/// In-process bridge to the surfaces the NSView walk can't see: SwiftUI content and (macOS 26+)
-/// the SwiftUI-rendered internals of AppKit controls, most visibly toolbar items.
-///
 /// SwiftUI is fully accessibility-compatible — but its AX tree is built LAZILY, only once an
 /// assistive client announces itself. Until then `NSHostingView.accessibilityChildren()` returns
 /// nothing, which is easily misread as "SwiftUI dropped accessibility". `materializeIfNeeded()`
@@ -16,7 +78,7 @@ import AppKit
 /// Those nodes answer the modern `NSAccessibilityProtocol` *messages* (role, label, value,
 /// press…) but do not declare Swift protocol conformance, so `as? NSAccessibilityProtocol`
 /// fails on them — every accessor here goes through `AnyObject` dynamic lookup instead.
-enum AXBridge {
+extension AXBridge {
     private static var materialized = false
 
     /// Make SwiftUI (and AppKit's SwiftUI-backed internals) build their AX node trees.
