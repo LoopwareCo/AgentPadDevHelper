@@ -23,10 +23,14 @@ import AppKit
 ///
 /// All methods must run on the main thread (UIKit/AppKit) — `DevToolHandler` hops there.
 final class UIDriver {
-    private final class WeakBox { weak var obj: AnyObject?; init(_ o: AnyObject) { obj = o } }
+    fileprivate final class WeakBox { weak var obj: AnyObject?; init(_ o: AnyObject) { obj = o } }
     private var registry: [Int: WeakBox] = [:]
     private var idByObject: [ObjectIdentifier: Int] = [:]
     private var nextId = 1
+    /// Which control a grafted menu belongs to. A menu item has no back pointer to the button that
+    /// owns its menu, and a pop-up's items are driven by SELECTING them on that button — so the
+    /// walk remembers the owner as it grafts the items in (AppKit backend).
+    fileprivate var menuOwners: [ObjectIdentifier: WeakBox] = [:]
 
     /// Keep a live object's ref STABLE across snapshots (so a ref from one `find`/`snapshot` still
     /// resolves in a later `act`/`inspect`), and just prune entries whose object was deallocated so
@@ -34,6 +38,7 @@ final class UIDriver {
     private func reset() {
         for (id, box) in registry where box.obj == nil { registry.removeValue(forKey: id) }
         idByObject = idByObject.filter { registry[$0.value] != nil }
+        menuOwners = menuOwners.filter { $0.value.obj != nil }
     }
     private func register(_ obj: AnyObject) -> Int {
         let oid = ObjectIdentifier(obj)
@@ -453,7 +458,28 @@ extension UIDriver {
         // SwiftUI hosting views draw most controls without any NSView behind them; the elements
         // live only on the (materialized) AX layer, so graft those in as extra children.
         if AXBridge.isHostingView(v) { kids += AXBridge.elementChildren(of: v) }
+        // A button that OWNS a menu (a pop-up, or the app's "•••" / "＋" menu buttons) hides its
+        // real choices in NSMenuItems no view stands for — the same problem UIKit's bar buttons
+        // have above, and the same answer: graft the items in as children.
+        if let b = v as? NSButton, let menu = b.menu {
+            menuOwners[ObjectIdentifier(menu)] = WeakBox(b)
+            kids += Self.menuChildren(menu)
+        }
         return kids
+    }
+
+    /// A menu's drivable items. Menus in AppKit are filled LAZILY — `menuNeedsUpdate` is where the
+    /// app puts its items — so ask for that update first, exactly as AppKit does before showing
+    /// one; without it a menu button reads as having no choices at all.
+    static func menuChildren(_ menu: NSMenu) -> [AnyObject] {
+        menu.delegate?.menuNeedsUpdate?(menu)
+        return menu.items.filter { !$0.isSeparatorItem && !$0.isHidden }
+    }
+
+    /// The control whose menu this item belongs to, as noted by the walk that grafted it in.
+    func menuOwner(of item: NSMenuItem) -> AnyObject? {
+        guard let menu = item.menu else { return nil }
+        return menuOwners[ObjectIdentifier(menu)]?.obj
     }
 
     func isVisible(_ obj: AnyObject) -> Bool {
@@ -462,6 +488,12 @@ extension UIDriver {
     }
 
     func makeNode(for obj: AnyObject, ref: Int) -> UINode {
+        if let mi = obj as? NSMenuItem {
+            return UINode(ref: ref, role: "menuItem", label: mi.title,
+                          value: mi.state == .on ? "on" : nil, identifier: mi.identifier?.rawValue,
+                          enabled: mi.isEnabled,
+                          actions: mi.action == nil && mi.submenu == nil ? [] : ["activate"])
+        }
         guard let v = obj as? NSView else { return AXBridge.node(for: obj, ref: ref) }
         let center = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil)
         return UINode(ref: ref, role: Self.role(v), label: Self.label(v), value: Self.value(v),
@@ -471,6 +503,20 @@ extension UIDriver {
     }
 
     func perform(_ obj: AnyObject, action: String) -> Bool {
+        // A grafted menu item. A CHOOSER pop-up's items carry the button's own action rather than
+        // one of their own, and picking one is a selection — so select it on the button the walk
+        // saw it under, then send that action. Everything else (pull-downs, plain menus) is its
+        // item's target/action, sent the way NSMenu sends it.
+        if let mi = obj as? NSMenuItem {
+            guard mi.isEnabled else { return false }
+            if let popUp = menuOwner(of: mi) as? NSPopUpButton, !popUp.pullsDown {
+                popUp.select(mi)
+                popUp.sendAction(popUp.action, to: popUp.target)
+                return true
+            }
+            guard let sel = mi.action else { return false }
+            return NSApp.sendAction(sel, to: mi.target, from: mi)
+        }
         // AX-only elements (SwiftUI controls) have exactly one way to be driven: the AX press.
         if !(obj is NSView) { return AXBridge.press(obj) }
         // "focus" puts KEYBOARD FOCUS on the element (a table row focuses its table, the way
@@ -492,6 +538,11 @@ extension UIDriver {
             sv.reflectScrolledClipView(clip)
             return true
         }
+        // A button that owns a menu is a MENU button: `performClick` starts modal menu tracking,
+        // which holds the main thread for as long as the menu is up — the driver's next call would
+        // never be serviced, so it reads as a hang. Its items are grafted in as its children (see
+        // `childElements`); press one of those instead.
+        if action == "activate", let b = obj as? NSButton, b.menu != nil { return false }
         // A static NSTextField label is technically an NSControl, but performClick on it is a
         // no-op — let it fall through to the row-selection branch below instead (a row's own text
         // is exactly what a caller aims at when it means "click this row").
@@ -663,6 +714,8 @@ extension UIDriver {
     }
     private static func actions(_ v: NSView) -> [String] {
         var a: [String] = []
+        // A menu button isn't activatable in-process (see `perform`) — its items are.
+        if let b = v as? NSButton, b.menu != nil { return [] }
         if v is NSControl { a.append("activate") }
         else if v.gestureRecognizers.contains(where: { $0 is NSClickGestureRecognizer }) { a.append("activate") }
         else if AXBridge.canPress(v) { a.append("activate") }   // AX-layer actionability (toolbar items)
