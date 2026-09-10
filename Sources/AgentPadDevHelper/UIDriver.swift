@@ -680,10 +680,20 @@ extension UIDriver {
         return false
     }
 
+    /// The real AX role of a view. **Cell-backed controls answer `AXUnknown` at the VIEW level**
+    /// on macOS 27 — `NSButton.accessibilityRole()` is `AXUnknown` while its `NSButtonCell` says
+    /// `AXCheckBox` — so every checkbox in the app read as a plain `button` with no value, and a
+    /// driver had no way to see whether a destructive toggle ("Run in a copy") was ticked. Ask the
+    /// cell whenever the view has nothing to say.
+    static func axRole(_ v: NSView) -> NSAccessibility.Role? {
+        if let own = v.accessibilityRole(), own != .unknown { return own }
+        return (v as? NSControl)?.cell?.accessibilityRole()
+    }
+
     static func role(_ v: NSView) -> String {
         switch v {
         case let b as NSButton:
-            switch b.accessibilityRole() {
+            switch axRole(b) {
             case .some(.checkBox): return "checkbox"
             case .some(.radioButton): return "radio"
             default: return "button"
@@ -734,7 +744,7 @@ extension UIDriver {
         if let tv = v as? NSTextView { return tv.string }
         if let sw = v as? NSSwitch { return stateString(sw.state) }
         // Checkboxes / radios carry a meaningful on/off/mixed state; momentary push buttons don't.
-        if let b = v as? NSButton, b.accessibilityRole() == .checkBox || b.accessibilityRole() == .radioButton {
+        if let b = v as? NSButton, axRole(b) == .checkBox || axRole(b) == .radioButton {
             return stateString(b.state)
         }
         return nil

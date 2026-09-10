@@ -1,4 +1,7 @@
 import Foundation
+#if !canImport(UIKit) && canImport(AppKit)
+import AppKit
+#endif
 
 /// Drop-in: add this package to any iOS or macOS app and call `AgentPadDevHelper.start()` to let
 /// AgentPad drive the app's UI in-process — inspect the live view tree and activate controls / set
@@ -68,6 +71,16 @@ public enum AgentPadDevHelper {
     /// DEBUG-only; a no-op call site in a release build simply never links this in.
     public static func startLoopbackDriver(port: UInt16) {
         LoopbackDriver.shared.start(port: port)
+    }
+    #endif
+
+    #if !canImport(UIKit) && canImport(AppKit)
+    /// Exactly what `ui_inspect` would report for ONE view — role, label, value, identifier,
+    /// actions — without standing a driver connection up. For headless UI gates that assert a
+    /// control is really DRIVABLE (a checkbox whose ticked state a driver can read back, a button
+    /// a driver can name) rather than merely present. Main thread, like every walk here.
+    public static func driverNode(for view: NSView) -> UINode {
+        UIDriver().makeNode(for: view, ref: 0)
     }
     #endif
 }
