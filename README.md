@@ -150,8 +150,6 @@ LAN binding, no token. Running two apps side by side? Give each its own port.
 | `ui_focus` | Which view holds keyboard focus, and whether it's an editable text editor |
 | `ui_key` | Type real key events into the app's own event queue — **macOS only** |
 | `ui_shot` | Write a PNG of one of the app's windows |
-| `review_mode` | Enter/leave **Review UI Mode**: an in-app floating bar where the user taps UI elements and leaves feedback that lands back in AgentPad's UI Feedback Inbox |
-| `feedback_chooser` | Raise the UI-feedback chooser — **iOS only**. `via: "motion"` posts a real `motionShake` instead, exercising the same path Simulator ▸ Device ▸ Shake uses |
 | `widgets_list` | The widgets this app has declared |
 | `widgets_values` | The current values behind a widget's bindings |
 | `widget_set` | Write a control's value, as if the user moved it |
@@ -233,3 +231,15 @@ follow it — the next `ui_snapshot` sees the alert's own buttons.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Live Review UI
+
+AgentPad's **Review UI** button opens the in-app review bar. Choose UI, leave a note, and
+send its screenshot/element details straight to the AgentPad session that started the review.
+Only that connection receives it. Done or a disconnect ends the review. The SDK has no
+app-side inbox, shake gesture, Help-menu insertion, feedback export, app keys, or Release
+feedback capture API. Review mode is unavailable through the optional loopback driver.
+
+AgentPad can show a running app before the helper connects; connecting upgrades that same
+row. On AgentPad-managed iOS Simulator launches, the helper can be injected without adding
+this package. App-defined widgets and other platforms still require integration.

@@ -25,6 +25,8 @@ final class DevKitClient {
     private var sessions: [String: Session] = [:]        // endpoint.label → session
     private var claimedBy: [String: String] = [:]        // "server|flavor" → the endpoint.label holding it
     private var started = false
+    // Main-thread confined: a review belongs to exactly one live transport.
+    private let review = LiveReviewSession<Session>()
 
     func start() {
         lock.lock()
@@ -38,8 +40,8 @@ final class DevKitClient {
         // Review UI Mode reports through the same fan-out. Wired on main because the
         // controller is main-thread-confined (it owns windows).
         DispatchQueue.main.async { [weak self] in
-            ReviewModeController.shared.onSubmit = { payload in self?.broadcastFeedback(payload) }
-            ReviewModeController.shared.onModeChanged = { active in self?.broadcastReviewMode(active) }
+            ReviewModeController.shared.onSubmit = { payload in self?.review.submit(payload) }
+            ReviewModeController.shared.onModeChanged = { active in self?.review.modeChanged(active) }
         }
 
         for endpoint in Self.candidateEndpoints() {
@@ -175,23 +177,32 @@ final class DevKitClient {
         lock.lock(); let all = Array(sessions.values); lock.unlock()
         all.forEach { $0.sendValue(widgetId: widgetId, json: json) }
     }
-    /// One piece of Review-UI feedback → every claimed session (a dev AND a release AgentPad
-    /// watching this app both get it, same as widgets). The item is already in the outbox;
-    /// whichever server acks first deletes it — an unreachable server just leaves it parked.
-    private func broadcastFeedback(_ item: OutboxItem) {
-        lock.lock(); let all = Array(sessions.values); lock.unlock()
-        all.forEach { $0.sendFeedback(item) }
-    }
-    private func broadcastReviewMode(_ active: Bool) {
-        lock.lock(); let all = Array(sessions.values); lock.unlock()
-        all.forEach { $0.sendReviewMode(active) }
+    fileprivate func disconnected(_ session: Session) {
+        DispatchQueue.main.async { [weak self] in self?.review.disconnect(session) }
     }
 
-    fileprivate func handleCall(tool: String, argsJSON: String, completion: @escaping (String, Bool) -> Void) {
+    fileprivate func handleCall(from session: Session, tool: String, argsJSON: String, connectionID: UUID,
+                                completion: @escaping (String, Bool) -> Void) {
         let args = argsJSON.data(using: .utf8)
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-        handler.call(tool, arguments: args, completion: completion)
+        if tool == "review_mode" {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard let reviewID = args["reviewID"] as? String else {
+                    completion("ERROR: start Review UI from AgentPad.", true); return
+                }
+                let enabled = args["enabled"] as? Bool ?? true
+                let accepted = self.review.setActive(enabled, owner: session,
+                    send: { [weak session] in session?.sendFeedback($0, reviewID: reviewID, connectionID: connectionID) },
+                    report: { [weak session] in session?.sendReviewMode($0, reviewID: reviewID, connectionID: connectionID) },
+                    activate: { ReviewModeController.shared.setActive($0) })
+                completion(accepted ? "ok: review mode updated" : "ERROR: another AgentPad is reviewing this app.", !accepted)
+            }
+        } else {
+            handler.call(tool, arguments: args, completion: completion)
+        }
     }
+
 }
 
 // MARK: - one dial-out connection to one endpoint
@@ -203,6 +214,7 @@ private final class Session {
     private unowned let client: DevKitClient
     private let queue: DispatchQueue
 
+    private var connectionID = UUID()
     private var conn: NWConnection?
     private var backoff: TimeInterval = 2
     private var buffer = Data()
@@ -235,6 +247,7 @@ private final class Session {
             nwEndpoint = .hostPort(host: NWEndpoint.Host(host), port: p)
         }
         let c = NWConnection(to: nwEndpoint, using: .tcp)
+        connectionID = UUID()
         conn = c
         c.stateUpdateHandler = { [weak self] state in self?.queue.async { self?.handleState(state) } }
         c.start(queue: queue)
@@ -295,29 +308,22 @@ private final class Session {
             self.send(["values": ["widgetId": widgetId, "valuesJSON": json]])
         }
     }
-    func sendFeedback(_ item: OutboxItem) {
+    func sendFeedback(_ payload: FeedbackPayload, reviewID: String, connectionID: UUID) {
         queue.async { [weak self] in
-            guard let self, self.claimed else { return }
-            self.sendFeedbackFrame(item)
+            guard let self, self.claimed, self.connectionID == connectionID,
+                  let data = try? JSONEncoder().encode(payload),
+                  var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            object["reviewID"] = reviewID
+            guard let encoded = try? JSONSerialization.data(withJSONObject: object),
+                  let json = String(data: encoded, encoding: .utf8) else { return }
+            self.send(["feedback": ["payloadJSON": json]])
         }
     }
-
-    /// The `feedback` envelope: `id` + `capturedAt` ride NEXT TO the payload (not inside it) so
-    /// an old server — which only reads `payloadJSON` — still stores the item; it just never
-    /// acks, and the outbox keeps the file. `queue`.
-    private func sendFeedbackFrame(_ item: OutboxItem) {
-        // The screenshot lives in a sidecar file — attach it only now, for this one frame.
-        let full = FeedbackOutbox.shared.fullItem(item)
-        guard let data = try? JSONEncoder().encode(full.payload),
-              let payloadJSON = String(data: data, encoding: .utf8) else { return }
-        send(["feedback": ["payloadJSON": payloadJSON,
-                           "id": item.id,
-                           "capturedAt": WireDate.iso8601.string(from: item.capturedAt)]])
-    }
-    func sendReviewMode(_ active: Bool) {
+    func sendReviewMode(_ active: Bool, reviewID: String, connectionID: UUID) {
         queue.async { [weak self] in
             guard let self, self.claimed else { return }
-            self.send(["reviewMode": ["active": active]])
+            guard self.connectionID == connectionID else { return }
+            self.send(["reviewMode": ["active": active, "reviewID": reviewID]])
         }
     }
 
@@ -356,9 +362,7 @@ private final class Session {
         guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
         if let welcome = obj["welcome"] as? [String: Any] { handleWelcome(welcome); return }
         if let call = obj["call"] as? [String: Any] { handleCall(call); return }
-        if let ack = obj["feedbackAck"] as? [String: Any], let id = ack["id"] as? String {
-            handleFeedbackAck(id); return
-        }
+
     }
 
     private func handleWelcome(_ w: [String: Any]) {
@@ -378,57 +382,23 @@ private final class Session {
         }
         claimed = true
         backoff = 2
-        // A server that acks feedback (welcome `acks`) gets the parked outbox re-sent. An OLD
-        // server never would ack, so re-sending there would store a fresh duplicate per
-        // reconnect — its users still get live submits, just no catch-up.
-        acksSupported = (w["acks"] as? Bool) == true
         sendHello()   // register only AFTER winning the claim for this server
         let specsJSON = AgentPadDev.shared.specsArrayJSON()
         if specsJSON != "[]" { send(["widgets": ["specsJSON": specsJSON]]) }
         for (widgetId, json) in AgentPadDev.shared.valuesSnapshot() {
             send(["values": ["widgetId": widgetId, "valuesJSON": json]])
         }
-        startDrain()
-    }
-
-    // MARK: outbox drain (send parked feedback one item per ack — items can carry ~4 MB
-    // screenshots, and dumping the whole backlog into one socket buffer would hold megabytes in
-    // memory for a transfer TCP paces anyway)
-
-    private var acksSupported = false
-    private var pendingDrain: [OutboxItem] = []
-    private var drainTimeout: DispatchWorkItem?
-
-    private func startDrain() {
-        guard acksSupported else { return }
-        pendingDrain = FeedbackOutbox.shared.all()
-        sendNextDrainItem()
-    }
-
-    private func sendNextDrainItem() {
-        drainTimeout?.cancel(); drainTimeout = nil
-        guard claimed, acksSupported, !pendingDrain.isEmpty else { return }
-        let item = pendingDrain.removeFirst()
-        sendFeedbackFrame(item)
-        // No ack in 20s = the server isn't playing (wedged, or a middlebox ate the frame) —
-        // stop pushing; the rest of the backlog waits for the next welcome.
-        let timeout = DispatchWorkItem { [weak self] in self?.pendingDrain.removeAll() }
-        drainTimeout = timeout
-        queue.asyncAfter(deadline: .now() + 20, execute: timeout)
-    }
-
-    private func handleFeedbackAck(_ id: String) {
-        FeedbackOutbox.shared.delete(ids: [id])
-        // Whether this acked a drain item or a live submit, the connection is proven live —
-        // keep the backlog moving.
-        sendNextDrainItem()
     }
 
     private func handleCall(_ c: [String: Any]) {
         guard let id = (c["id"] as? NSNumber)?.intValue, let tool = c["tool"] as? String else { return }
         let argsJSON = c["argsJSON"] as? String ?? "{}"
-        client.handleCall(tool: tool, argsJSON: argsJSON) { [weak self] text, isError in
-            self?.queue.async { self?.send(["reply": ["id": id, "resultJSON": text, "isError": isError]]) }
+        let generation = connectionID
+        client.handleCall(from: self, tool: tool, argsJSON: argsJSON, connectionID: generation) { [weak self] text, isError in
+            self?.queue.async {
+                guard let self, self.connectionID == generation, self.claimed else { return }
+                self.send(["reply": ["id": id, "resultJSON": text, "isError": isError]])
+            }
         }
     }
 
@@ -455,10 +425,7 @@ private final class Session {
     private func teardown() {
         if claimed, let key = identityKey { client.release(identityKey: key, endpointLabel: endpoint.label) }
         claimed = false
-        acksSupported = false
-        pendingDrain.removeAll()
-        drainTimeout?.cancel()
-        drainTimeout = nil
+        client.disconnected(self)
         // Drop the handler BEFORE cancelling: otherwise the cancel we're about to do reports
         // `.cancelled` straight back into `handleState` and schedules a second retry for the same
         // drop.

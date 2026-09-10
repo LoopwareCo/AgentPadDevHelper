@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Review UI is live-only, initiated by AgentPad and bound to its connection/review ID.
+- Removed app keys, shipped feedback capture, app-side inbox/export APIs, shake and Help-menu entry points.
+- Loopback tools no longer expose review_mode or feedback_chooser.
+
+
 - **macOS: an app with no icon of its own now reports no icon, instead of the system's.** macOS has
   no "this app has no icon" answer — `NSApplication.applicationIconImage` hands back the generic app
   artwork — so the SDK was telling the server that placeholder WAS the app. It now checks its own

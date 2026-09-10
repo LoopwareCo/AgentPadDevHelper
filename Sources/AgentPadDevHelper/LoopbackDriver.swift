@@ -140,8 +140,7 @@ final class LoopbackDriver {
         /// endpoint is only ever driven by another AgentPad or a hand-written `curl`, not a strict
         /// MCP client.
         private static let toolNames = ["ui_snapshot", "ui_find", "ui_act", "ui_setvalue", "ui_inspect",
-                                        "ui_read", "ui_focus", "ui_key", "ui_shot", "review_mode",
-                                        "feedback_chooser",
+                                        "ui_read", "ui_focus", "ui_key", "ui_shot",
                                         "widgets_list", "widgets_values", "widget_set"]
 
         private func result(_ id: Any?, _ r: [String: Any]) -> [String: Any] { ["jsonrpc": "2.0", "id": id ?? NSNull(), "result": r] }

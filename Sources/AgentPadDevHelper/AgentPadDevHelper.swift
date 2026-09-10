@@ -52,59 +52,8 @@ public enum AgentPadDevHelper {
         }
         started = true
         DevKitClient.shared.start()
-        // Development builds get the developer entry points too (Help-menu grouping / shake) —
-        // feedback then rides the dial-out connections like everything else.
-        FeedbackEntryPoints.shared.install(mode: .debugDialOut)
         #endif
     }
-
-    // MARK: - UI feedback capture (shippable, capture-only)
-
-    /// How feedback captured via `enableUIFeedback` leaves the device.
-    public enum UIFeedbackMode {
-        /// Feedback ONLY stores on this device; the user decides to share it (the pending list's
-        /// share panel writes one `.agentpadfeedback` file the developer opens in AgentPad).
-        /// Nothing dials out — safe to ship to beta testers.
-        case localOnly
-        /// YOUR OWN devices only: feedback syncs over the local network to the ONE AgentPad
-        /// that minted this key (Server Settings → Apps → Add Key). Feedback-only — the key
-        /// authorizes pushing inbox items, never UI driving. The host app's Info.plist must
-        /// declare `NSLocalNetworkUsageDescription` and `NSBonjourServices` with
-        /// `_agentpad-apps._tcp`; feedback crosses your WiFi sealed to the key.
-        case appKey(String)
-    }
-
-    /// Turn on in-app UI reviews: the entry points (macOS: an "AgentPad" grouping at the end of
-    /// the Help menu; iOS: SHAKE the device) plus the on-device outbox behind them.
-    ///
-    /// Unlike `start()`, this is NOT development-gated — it opens no control channel. Everything
-    /// it enables is user-initiated capture that stays on the device until the user (or, in a
-    /// development build, the dial-out sync) moves it. Call it unconditionally, or only for the
-    /// builds you want collecting feedback.
-    ///
-    /// On iOS the shake is read straight off the accelerometer, so it needs no authorization and
-    /// no Info.plist key, and it samples only while the app is foreground-active.
-    public static func enableUIFeedback(_ mode: UIFeedbackMode = .localOnly) {
-        switch mode {
-        case .localOnly:
-            FeedbackEntryPoints.shared.install(mode: .localOnly)
-        case .appKey(let key):
-            KeyedFeedbackClient.shared.start(fullKey: key)
-            FeedbackEntryPoints.shared.install(mode: .appKey)
-        }
-    }
-
-    #if canImport(UIKit)
-    /// Raise the UI-feedback chooser (leave a review / view pending) from the host app's own UI —
-    /// a Settings row, a debug menu, a long-press somewhere that suits the app better than a
-    /// shake. Also the only way to see it in a Simulator, which has no accelerometer.
-    ///
-    /// No-op unless `enableUIFeedback(_:)` has been called; safe to call more than once (a
-    /// chooser already on screen stays as it is).
-    public static func showUIFeedbackChooser() {
-        DispatchQueue.main.async { FeedbackEntryPoints.shared.showChooser() }
-    }
-    #endif
 
     /// Stop every dial-out connection.
     public static func stop() {

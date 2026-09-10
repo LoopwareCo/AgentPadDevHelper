@@ -21,10 +21,8 @@ final class ReviewModeController {
     static let shared = ReviewModeController()
     private init() {}
 
-    /// Submitted feedback, already persisted to the outbox and ready for the wire. Wired by
-    /// `DevKitClient` to the `feedback` frame; the outbox file is deleted only on a server's
-    /// `feedbackAck`, so a submit with no reachable server just waits on disk.
-    var onSubmit: ((OutboxItem) -> Void)?
+    /// Live feedback, sent only to the connection that opened this review.
+    var onSubmit: ((FeedbackPayload) -> Void)?
     /// Mode changes (both directions). Wired by `DevKitClient` to the `reviewMode` frame.
     var onModeChanged: ((Bool) -> Void)?
 
@@ -87,7 +85,6 @@ final class ReviewModeController {
     static func isReviewWindow(_ window: UIWindow) -> Bool {
         let c = shared
         return window === c.stripWindow || window === c.composeWindow
-            || FeedbackEntryPoints.isFeedbackWindow(window)   // grab strip / chooser / pending list
             || ReviewOverlay.liveOverlayWindows.contains { $0 === window }
     }
     #else
@@ -180,11 +177,8 @@ final class ReviewModeController {
         // chosen element, else whichever window they're working in. (The bar/overlay are their
         // own windows, so they're never in the shot.)
         let screenshot = ElementPath.captureWindowPNGBase64(of: attachedIsDefault ? nil : attachedWindow)
-        // Outbox FIRST, wire second: the item is durable the moment the user hits send,
-        // whether or not any AgentPad is reachable right now.
-        let item = FeedbackOutbox.shared.record(
-            FeedbackPayload(message: message, element: attachedElement, screenshotPNG: screenshot))
-        onSubmit?(item)
+        guard isActive else { return }
+        onSubmit?(FeedbackPayload(message: message, element: attachedElement, screenshotPNG: screenshot))
         // Back to the default scope for the next thought.
         attachedIsDefault = true
         attachedWindow = nil
