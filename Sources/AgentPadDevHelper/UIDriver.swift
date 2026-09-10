@@ -135,7 +135,13 @@ final class UIDriver {
     /// Which view holds keyboard focus right now. The in-process actions above bypass the event
     /// path entirely, so this (with `key`) is how a focus-routing bug — "typing here should land
     /// in the message field" — is observed at all.
-    func focus() -> String { focusReport() }
+    ///
+    /// With `window`, it first BRINGS THAT WINDOW UP: the app activates itself, and the window is
+    /// ordered front and made key. In-process actions can open a window but never make it the KEY
+    /// window of a background app, and surfaces that behave differently while they're being looked
+    /// at — the environment pop-out only streams its 60 fps `active` tier while it is key — can't
+    /// be exercised at all until something does this.
+    func focus(window: String? = nil) -> String { focusReport(window: window) }
 
     /// Type `text` as real key events posted to the app's own event queue, so local event
     /// monitors and the responder chain see them exactly as they see a keystroke. Unlike
@@ -336,8 +342,9 @@ extension UIDriver {
         return "ok: wrote \(url.path) — \(Int(win.bounds.width))x\(Int(win.bounds.height)) pts"
     }
 
-    /// Which responder holds keyboard focus (UIKit: the first responder in the key window).
-    func focusReport() -> String {
+    /// Which responder holds keyboard focus (UIKit: the first responder in the key window). iOS has
+    /// no window activation to perform, so `window` is accepted and ignored.
+    func focusReport(window: String? = nil) -> String {
         let windows = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }
         guard let win = windows.first else { return "no key window" }
         guard let fr = win.ap_firstResponder else { return "key window: no first responder" }
@@ -495,6 +502,18 @@ extension UIDriver {
                           actions: mi.action == nil && mi.submenu == nil ? [] : ["activate"])
         }
         guard let v = obj as? NSView else { return AXBridge.node(for: obj, ref: ref) }
+        // A WINDOW root reports as the window it is. `rootElements` roots each window at its frame
+        // view (`NSThemeFrame`), whose AX layer carries no name at all — so a multi-window snapshot
+        // was a list of anonymous `NSThemeFrame`s and the only way to tell one window from another
+        // was to read the first label INSIDE it. That is how the environment pop-out came to be
+        // read as "Paused" (its status chip) and Settings ▸ VMs & Simulators as "Server:" (the
+        // pane's server chooser). The window's own title is the answer, and `isSheet` distinguishes
+        // a sheet — a modal put up ON a window — from a window of its own.
+        if let win = v.window, (win.contentView?.superview ?? win.contentView) === v {
+            return UINode(ref: ref, role: win.isSheet ? "sheet" : "window",
+                          label: win.title.isEmpty ? nil : win.title,
+                          identifier: v.identifier?.rawValue, actions: [])
+        }
         let center = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil)
         return UINode(ref: ref, role: Self.role(v), label: Self.label(v), value: Self.value(v),
                       identifier: v.identifier?.rawValue,
@@ -596,8 +615,19 @@ extension UIDriver {
     /// The key window's first responder, plus the field editor's delegate when one is focused (the
     /// editor is a shared NSTextView, so the interesting identity is the field BEING edited), and
     /// whether it's editable — the distinction focus-routing code keys on.
-    func focusReport() -> String {
-        guard let win = NSApp?.keyWindow ?? NSApp?.mainWindow ?? NSApp?.windows.first(where: { $0.isVisible }) else {
+    func focusReport(window: String? = nil) -> String {
+        let visible = (NSApp?.windows ?? []).filter { $0.isVisible }
+        let named = window.flatMap { want in visible.first { $0.title.range(of: want, options: .caseInsensitive) != nil } }
+        // A named window is BROUGHT UP first: activate the app, order it front, make it key — the
+        // state a user's own click would leave it in. Self-activation is all a hosted process can
+        // do; if the app is refused it, the report's `key=` tells the caller so rather than
+        // pretending it worked.
+        if let want = window {
+            guard let named else { return "ERROR: no visible window whose title contains " + want + "." }
+            NSApp?.activate(ignoringOtherApps: true)
+            named.makeKeyAndOrderFront(nil)
+        }
+        guard let win = named ?? NSApp?.keyWindow ?? NSApp?.mainWindow ?? visible.first else {
             return "no visible window"
         }
         guard let fr = win.firstResponder else { return "window \"\(win.title)\": no first responder" }

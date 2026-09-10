@@ -37,7 +37,8 @@ final class DevToolHandler {
                                              maxChars: arguments["maxChars"] as? Int ?? 12000)
                 completion(r, r.hasPrefix("ERROR"))
             case "ui_focus":
-                completion(self.driver.focus(), false)
+                let r = self.driver.focus(window: arguments["window"] as? String)
+                completion(r, r.hasPrefix("ERROR"))
             case "ui_key":
                 guard let text = arguments["text"] as? String else { return completion("ERROR: missing 'text'.", true) }
                 let r = self.driver.key(text: text, window: arguments["window"] as? String)

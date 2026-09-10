@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Windows are named in the walk.** `ui_snapshot`/`ui_read` root each macOS window at its frame
+  view, which carries no accessible name — so every window read as an anonymous `NSThemeFrame` and
+  the only way to tell one from another was the first label inside it (a driver run duly called a
+  device pop-out "Paused", after its status chip). A window root now reports as the window: role
+  `window`, or `sheet` when it is one, labelled with `NSWindow.title`.
+- **`ui_focus` can bring a window up.** Passing `window` activates the app and makes that window
+  key before reporting focus — the only in-process way to reach behaviour gated on a window being
+  looked at (a device feed's full-rate stream). Self-activation only; the report's `key=` says
+  whether the system honoured it.
+
 - Review UI is live-only, initiated by AgentPad and bound to its connection/review ID.
 - Removed app keys, shipped feedback capture, app-side inbox/export APIs, shake and Help-menu entry points.
 - Loopback tools no longer expose review_mode or feedback_chooser.
