@@ -14,6 +14,9 @@ public enum DevKit {
     public static let devTCPPort: UInt16 = 8797
     public static let releaseTCPPort: UInt16 = 8798
 
+    /// Guest-only loopback reverse forward to the owning host server, separate from guest servers.
+    public static let guestTCPPort: UInt16 = 8796
+
     /// `AGENTPAD_DEVKIT_HOST` — an optional extra `"host:port"` dial-out target (a LAN AgentPad, or a
     /// real iOS device reaching a Mac by address) read by `DevKitClient`'s fallback ladder.
     public static let lanHostEnvVar = "AGENTPAD_DEVKIT_HOST"

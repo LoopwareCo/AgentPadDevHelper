@@ -86,7 +86,7 @@ final class DevKitClient {
     /// different processes on different filesystems even in the Simulator), so only loopback TCP
     /// (which the Simulator forwards to the host) + the LAN override apply — a real device needs
     /// `AGENTPAD_DEVKIT_HOST` to reach a Mac at all.
-    static func candidateEndpoints() -> [Endpoint] {
+    static func candidateEndpoints(lanHost: String? = ProcessInfo.processInfo.environment[DevKit.lanHostEnvVar]) -> [Endpoint] {
         var out: [Endpoint] = []
         #if os(macOS)
         // No unix rungs for a SANDBOXED app: its Application Support resolves to the app
@@ -107,18 +107,25 @@ final class DevKitClient {
         out.append(Endpoint(kind: .tcp(host: "127.0.0.1", port: DevKit.devTCPPort)))
         out.append(Endpoint(kind: .tcp(host: "127.0.0.1", port: DevKit.releaseTCPPort)))
         #if os(macOS)
+        out += guestEndpoints(inVM: AppIdentity.isInsideVM)
         if AppIdentity.isInsideVM, let gateway = defaultGatewayAddress() {
             out.append(Endpoint(kind: .tcp(host: gateway, port: DevKit.devTCPPort)))
             out.append(Endpoint(kind: .tcp(host: gateway, port: DevKit.releaseTCPPort)))
         }
         #endif
-        if let lan = ProcessInfo.processInfo.environment[DevKit.lanHostEnvVar] {
+        if let lan = lanHost {
             let parts = lan.split(separator: ":", maxSplits: 1)
             if parts.count == 2, let port = UInt16(parts[1]) {
                 out.append(Endpoint(kind: .tcp(host: String(parts[0]), port: port)))
             }
         }
-        return out
+        var seen = Set<Endpoint>()
+        return out.filter { seen.insert($0).inserted }
+    }
+
+    /// Fixed loopback target is retried even if the host tunnel appears after app launch or resume.
+    static func guestEndpoints(inVM: Bool) -> [Endpoint] {
+        inVM ? [Endpoint(kind: .tcp(host: "127.0.0.1", port: DevKit.guestTCPPort))] : []
     }
 
     #if os(macOS)
@@ -249,7 +256,13 @@ private final class Session {
         let c = NWConnection(to: nwEndpoint, using: .tcp)
         connectionID = UUID()
         conn = c
-        c.stateUpdateHandler = { [weak self] state in self?.queue.async { self?.handleState(state) } }
+        let generation = connectionID
+        c.stateUpdateHandler = { [weak self] state in
+            self?.queue.async {
+                guard let self, self.connectionID == generation else { return }
+                self.handleState(state)
+            }
+        }
         c.start(queue: queue)
     }
 
@@ -331,18 +344,24 @@ private final class Session {
         guard let conn, let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
         var line = data
         line.append(0x0A)
+        let generation = connectionID
         conn.send(content: line, completion: .contentProcessed { [weak self] error in
             guard error != nil else { return }
-            self?.queue.async { self?.scheduleRetry() }
+            self?.queue.async {
+                guard let self, self.connectionID == generation else { return }
+                self.scheduleRetry()
+            }
         })
     }
 
     // MARK: inbound frames
 
     private func receiveLoop() {
+        let generation = connectionID
         conn?.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, done, error in
             guard let self else { return }
             self.queue.async {
+                guard self.connectionID == generation else { return }
                 if let data, !data.isEmpty { self.buffer.append(data); self.drainLines() }
                 if done || error != nil { self.scheduleRetry(); return }
                 self.receiveLoop()
@@ -423,6 +442,7 @@ private final class Session {
     private var retryScheduled = false
 
     private func teardown() {
+        connectionID = UUID()   // late callbacks from the pre-suspend transport cannot cancel a reconnect
         if claimed, let key = identityKey { client.release(identityKey: key, endpointLabel: endpoint.label) }
         claimed = false
         client.disconnected(self)
