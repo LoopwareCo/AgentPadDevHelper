@@ -199,6 +199,14 @@ final class DevKitClient {
                     completion("ERROR: start Review UI from AgentPad.", true); return
                 }
                 let enabled = args["enabled"] as? Bool ?? true
+                // A self-review (Help ▸ Review AgentPad's UI…) holds the same single controller
+                // without going through `review`, so `setActive` would report accepted and then
+                // hit ReviewModeController's already-active guard as a silent no-op — the remote
+                // reviewer would be told "ok" while every note went to the local inbox. Refuse,
+                // the same way a second AgentPad is refused.
+                if enabled, SelfReview.owned {
+                    completion("ERROR: this app is reviewing its own UI.", true); return
+                }
                 let accepted = self.review.setActive(enabled, owner: session,
                     send: { [weak session] in session?.sendFeedback($0, reviewID: reviewID, connectionID: connectionID) },
                     report: { [weak session] in session?.sendReviewMode($0, reviewID: reviewID, connectionID: connectionID) },
