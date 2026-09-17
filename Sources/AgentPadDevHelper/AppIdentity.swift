@@ -34,6 +34,17 @@ enum AppIdentity {
         #endif
     }
 
+    /// The AgentPad session whose agent launched this process, from `AGENTPAD_SESSION` in the
+    /// environment (see `DevKit.sessionTagEnvVar`). Sent in the dial-out `hello` so the server can
+    /// own this app by LOOKUP instead of guessing from where it runs — the only way an app inside a
+    /// VM guest can be attributed, since the host can't read a guest process's environment.
+    /// nil for an app the user launched by hand (no session launched it).
+    static var sessionTag: String? {
+        let tag = ProcessInfo.processInfo.environment[DevKit.sessionTagEnvVar]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (tag?.isEmpty ?? true) ? nil : tag
+    }
+
     static var isSimulator: Bool {
         #if targetEnvironment(simulator)
         return true

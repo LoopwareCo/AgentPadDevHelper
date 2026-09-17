@@ -314,6 +314,11 @@ private final class Session {
             obj["vm"] = true
             if let address = AppIdentity.guestAddress { obj["vmAddress"] = address }
         }
+        // WHICH session launched this app, as an env tag the server wrote (`DevKit.sessionTagEnvVar`).
+        // AgentPad owns an app by this lookup alone; a same-Mac app is also attributable from its
+        // process environment, but a VM guest's isn't readable from the host, so it has to say so
+        // itself. Absent for an app the user opened by hand — which then belongs to no session.
+        if let tag = AppIdentity.sessionTag { obj["session"] = tag }
         send(["hello": obj])
     }
 

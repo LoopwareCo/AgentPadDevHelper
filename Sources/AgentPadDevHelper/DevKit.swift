@@ -20,4 +20,12 @@ public enum DevKit {
     /// `AGENTPAD_DEVKIT_HOST` — an optional extra `"host:port"` dial-out target (a LAN AgentPad, or a
     /// real iOS device reaching a Mac by address) read by `DevKitClient`'s fallback ladder.
     public static let lanHostEnvVar = "AGENTPAD_DEVKIT_HOST"
+
+    /// `AGENTPAD_SESSION` — the AgentPad session that launched this process. The server puts it in
+    /// the environment of every agent CLI it spawns (and its `open` shim passes it through), so an
+    /// app under development can simply SAY which session it belongs to instead of the server
+    /// guessing from which folder its executable happens to sit in. Read by `AppIdentity.sessionTag`
+    /// and sent in the dial-out `hello`; the server also reads it straight out of a same-Mac (or
+    /// Simulator) process's environment, so an app built against an older SDK is still attributed.
+    public static let sessionTagEnvVar = "AGENTPAD_SESSION"
 }
