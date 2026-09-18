@@ -143,12 +143,12 @@ LAN binding, no token. Running two apps side by side? Give each its own port.
 | --- | --- |
 | `ui_snapshot` | The live view tree as compact text: `[ref] role "label" ="value" #id @x,y` |
 | `ui_find` | Same, filtered by `role` and/or `label` substring — fewest tokens |
-| `ui_act` | Activate an element by `ref` (tap a button, select a row, toggle a switch) |
+| `ui_act` | Activate an element by `ref` (tap a button, select a list row, toggle a switch, `expand`/`collapse` an outline row) |
 | `ui_setvalue` | Set a text field/view's value by `ref`, firing its change handlers |
 | `ui_inspect` | One element's role, label, value, and available actions |
 | `ui_read` | A subtree's (or the whole app's) visible text in reading order — the prose view |
 | `ui_focus` | Which view holds keyboard focus, and whether it's an editable text editor |
-| `ui_key` | Type real key events into the app's own event queue — **macOS only** |
+| `ui_key` | Real key events into the app's own event queue: `text` to type, `key`/`keyCode` for one named key — **macOS only** |
 | `ui_shot` | Write a PNG of one of the app's windows |
 | `widgets_list` | The widgets this app has declared |
 | `widgets_values` | The current values behind a widget's bindings |
@@ -161,9 +161,22 @@ are stable within a snapshot — re-snapshot after the UI changes.
 grant** — it's how you look at your UI from a context where `screencapture` is refused.
 
 `ui_key` targets no element on purpose: `ui_setvalue` proves a field *can* hold text, `ui_key`
-proves a keystroke actually *lands* there. Pair it with `ui_focus` to test focus routing. UIKit
-has no way to post into its own event queue, so on iOS it returns an error pointing at
-`ui_setvalue`.
+proves a keystroke actually *lands* there. Pair it with `ui_focus` to test focus routing. Pass
+`text` to type characters, or `key` for one named key — `"space"`, `"up"`, `"return"`, `"escape"`,
+`"tab"`, `"pageup"`, `"f3"`, with modifiers inline (`"cmd+f"`, `"shift+tab"`) — or `keyCode` for an
+explicit virtual code. A named key carries the real code, which is what keyCode-driven handlers
+(space for Quick Look, arrow-key list navigation, a window's ⌘F monitor) route on. UIKit has no way
+to post into its own event queue, so on iOS it returns an error pointing at `ui_setvalue`.
+
+**Lists.** A table/outline row carries no target/action — a click SELECTS it, and it's the app's
+selection delegate that does the work. So `ui_act` on a row, its cell, or any label inside one
+selects that row through the app's own rules (its `shouldSelect` veto, its proposed-selection
+filter, keyboard focus, one selection notification). `expand`/`collapse`/`toggle` work the
+disclosure of an outline row from the row itself.
+
+**An element that can't do anything says so.** `ui_act` answers `ERROR` with the reason — "is a
+list — act on one of its ROWS", "is disabled", "is no longer in a row … snapshot again" — rather
+than a hollow `ok`, and a successful act reports what it did ("selected row 3 of 12").
 
 ## Why in-process
 

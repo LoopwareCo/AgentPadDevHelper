@@ -31,6 +31,16 @@ final class UIDriver {
     /// owns its menu, and a pop-up's items are driven by SELECTING them on that button — so the
     /// walk remembers the owner as it grafts the items in (AppKit backend).
     fileprivate var menuOwners: [ObjectIdentifier: WeakBox] = [:]
+    /// What the last `perform` actually DID, or why it refused. A driver that answers `ok` for an
+    /// element it quietly did nothing to is undiagnosable from the other end — the caller goes on
+    /// believing the row is selected — so the backends record an outcome here and `act` reports it.
+    var actionNote: String?
+    var actionRefusal: String?
+    /// Refuse an action, with the reason `act` will print. Always returns false, so a `perform`
+    /// branch reads `return refuse("…")`.
+    func refuse(_ reason: String) -> Bool { actionRefusal = reason; return false }
+    /// Succeed, noting what happened ("selected row 3 of 12"). Always returns true.
+    func did(_ note: String) -> Bool { actionNote = note; return true }
 
     /// Keep a live object's ref STABLE across snapshots (so a ref from one `find`/`snapshot` still
     /// resolves in a later `act`/`inspect`), and just prune entries whose object was deallocated so
@@ -75,8 +85,12 @@ final class UIDriver {
 
     func act(ref: Int, action: String?) -> String {
         guard let obj = element(ref) else { return "ERROR: unknown ref \(ref) (snapshot/find first)." }
-        return perform(obj, action: action ?? "activate") ? "ok: \(action ?? "activate") on [\(ref)]"
-                                                           : "ERROR: [\(ref)] is not activatable."
+        let name = action ?? "activate"
+        actionNote = nil; actionRefusal = nil
+        guard perform(obj, action: name) else {
+            return "ERROR: [\(ref)] \(actionRefusal ?? "is not activatable.")"
+        }
+        return "ok: \(name) on [\(ref)]" + (actionNote.map { " — \($0)" } ?? "")
     }
 
     func setValue(ref: Int, text: String) -> String {
@@ -143,10 +157,14 @@ final class UIDriver {
     /// be exercised at all until something does this.
     func focus(window: String? = nil) -> String { focusReport(window: window) }
 
-    /// Type `text` as real key events posted to the app's own event queue, so local event
+    /// Type `text`, or press one named key (`"space"`, `"up"`, `"cmd+f"`) / one explicit
+    /// `keyCode`, as real key events posted to the app's own event queue — so local event
     /// monitors and the responder chain see them exactly as they see a keystroke. Unlike
     /// `ui_setvalue` this does NOT target an element: it tests where the keystroke LANDS.
-    func key(text: String, window: String?) -> String { sendKey(text: text, window: window) }
+    func key(text: String?, named: String? = nil, keyCode: Int? = nil,
+             modifiers: [String] = [], window: String? = nil) -> String {
+        sendKey(text: text, named: named, keyCode: keyCode, modifiers: modifiers, window: window)
+    }
 
     // MARK: - Shared walk
 
@@ -355,7 +373,7 @@ extension UIDriver {
 
     /// UIKit has no equivalent of posting into the app's own event queue; text input arrives
     /// through the keyboard system, which a hosted process can't drive. `ui_setvalue` instead.
-    func sendKey(text: String, window: String?) -> String {
+    func sendKey(text: String?, named: String?, keyCode: Int?, modifiers: [String], window: String?) -> String {
         "ERROR: ui_key is macOS-only (no in-process key events on iOS) — use ui_setvalue."
     }
 
@@ -437,12 +455,6 @@ extension UIDriver {
 // MARK: - AppKit backend
 
 #if !canImport(UIKit) && canImport(AppKit)
-private extension NSView {
-    var ap_enclosingTableView: NSTableView? {
-        sequence(first: superview, next: { $0?.superview }).compactMap { $0 as? NSTableView }.first
-    }
-}
-
 extension UIDriver {
     static var appName: String { ProcessInfo.processInfo.processName }
 
@@ -527,27 +539,35 @@ extension UIDriver {
         // saw it under, then send that action. Everything else (pull-downs, plain menus) is its
         // item's target/action, sent the way NSMenu sends it.
         if let mi = obj as? NSMenuItem {
-            guard mi.isEnabled else { return false }
+            guard mi.isEnabled else { return refuse("is a disabled menu item.") }
             if let popUp = menuOwner(of: mi) as? NSPopUpButton, !popUp.pullsDown {
                 popUp.select(mi)
                 popUp.sendAction(popUp.action, to: popUp.target)
-                return true
+                return did("chose \"\(mi.title)\"")
             }
-            guard let sel = mi.action else { return false }
-            return NSApp.sendAction(sel, to: mi.target, from: mi)
+            guard let sel = mi.action else { return refuse("is a menu item with no action (a heading, or the parent of a submenu).") }
+            return NSApp.sendAction(sel, to: mi.target, from: mi) ? did("chose \"\(mi.title)\"")
+                 : refuse("is a menu item whose action \(sel) nothing answered.")
         }
         // AX-only elements (SwiftUI controls) have exactly one way to be driven: the AX press.
-        if !(obj is NSView) { return AXBridge.press(obj) }
+        guard let v = obj as? NSView else {
+            guard AXBridge.canPress(obj) else { return refuse("has no press on its accessibility layer.") }
+            return AXBridge.press(obj)
+        }
         // "focus" puts KEYBOARD FOCUS on the element (a table row focuses its table, the way
         // clicking a row does) without activating it — the starting state for a `ui_key` test.
-        if action == "focus", let v = obj as? NSView {
+        if action == "focus" {
             let target: NSView = (v is NSTableView) ? v : (v.ap_enclosingTableView ?? v)
-            return v.window?.makeFirstResponder(target) ?? false
+            guard let window = v.window else { return refuse("is not in a window, so nothing can focus it.") }
+            guard window.makeFirstResponder(target) else { return refuse("refused first-responder status.") }
+            return did("focused \(type(of: target))")
         }
         // Scroll before the NSControl branch: NSTableView IS an NSControl, and a scroll request
         // aimed at a table must not turn into a performClick.
-        if action == "scrollDown" || action == "scrollUp", let v = obj as? NSView,
-           let sv = (v as? NSScrollView) ?? v.enclosingScrollView ?? v.subviews.compactMap({ $0 as? NSScrollView }).first {
+        if action == "scrollDown" || action == "scrollUp" {
+            guard let sv = (v as? NSScrollView) ?? v.enclosingScrollView ?? v.subviews.compactMap({ $0 as? NSScrollView }).first else {
+                return refuse("is not in a scroll view, so there is nothing to \(action).")
+            }
             let clip = sv.contentView
             let dy = clip.bounds.height * 0.8 * (action == "scrollDown" ? 1 : -1)
             var origin = clip.bounds.origin
@@ -555,43 +575,91 @@ extension UIDriver {
             let constrained = clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin
             clip.scroll(to: constrained)
             sv.reflectScrolledClipView(clip)
-            return true
+            return did("scrolled \(action == "scrollDown" ? "down" : "up") one page")
+        }
+        // Open/close an outline row from the ROW — the disclosure triangle is one small button
+        // drawn inside it, and a caller who has the row should not have to go find it.
+        // `toggle` is ALSO the natural word for flipping a checkbox or a switch, so it only means
+        // the disclosure when this view's row really has something to open; otherwise it falls
+        // through to activation below. `expand`/`collapse` are outline-only and say so.
+        if let want = RowDriver.Expansion(action: action),
+           want != .toggle || RowDriver.expandableRow(of: v) != nil {
+            guard let outcome = RowDriver.setExpansion(want, forRowOf: v) else {
+                return refuse("is not inside an NSOutlineView row, so there is nothing to \(action).")
+            }
+            return report(outcome)
         }
         // A button that owns a menu is a MENU button: `performClick` starts modal menu tracking,
         // which holds the main thread for as long as the menu is up — the driver's next call would
         // never be serviced, so it reads as a hang. Its items are grafted in as its children (see
         // `childElements`); press one of those instead.
-        if action == "activate", let b = obj as? NSButton, b.menu != nil { return false }
-        // A static NSTextField label is technically an NSControl, but performClick on it is a
-        // no-op — let it fall through to the row-selection branch below instead (a row's own text
-        // is exactly what a caller aims at when it means "click this row").
-        let inertLabel = (obj as? NSTextField).map { !$0.isEditable && $0.action == nil } ?? false
-        if let c = obj as? NSControl, !inertLabel { c.performClick(nil); return true }
+        if action == "activate", let b = obj as? NSButton, b.menu != nil {
+            return refuse("owns a menu — activate one of its items instead (the walk lists them as its children).")
+        }
+        // A table IS an NSControl, but clicking one does nothing unless the app wired an action to
+        // it: what a caller means by "click the list" is one of its rows.
+        if let table = obj as? NSTableView, table.action == nil {
+            return refuse("is a list — act on one of its ROWS to select (the row view, its cell, or anything drawn inside one).")
+        }
+        // Only a control a click can actually MOVE is clicked. A static label, a file's icon
+        // (`NSImageView` is an NSControl too) and any other action-less control click into the
+        // void — they fall through to the row-selection branch below, which is exactly what a
+        // caller aiming at a row's own text or icon means.
+        if let c = obj as? NSControl, Self.clickDoesSomething(c) {
+            guard c.isEnabled else { return refuse("is disabled.") }
+            c.performClick(nil)
+            return did("clicked \(Self.role(v))")
+        }
         // Table/outline rows: select through the real delegate, the way a click does. (Row views
-        // carry no target/action, so without this a list — the sidebar's sessions, say — is walkable
-        // but not clickable.) `selectRowIndexes` alone doesn't notify, hence the explicit call.
-        if let v = obj as? NSView, let table = v.ap_enclosingTableView {
-            let row = table.row(for: v)
-            if row >= 0, table.delegate?.tableView?(table, shouldSelectRow: row) ?? true {
-                table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-                table.delegate?.tableViewSelectionDidChange?(
-                    Notification(name: NSTableView.selectionDidChangeNotification, object: table))
-                return true
-            }
+        // carry no target/action, so without this a list — the sidebar's sessions, the inspector's
+        // Changes, a file browser — is walkable but not clickable, and nothing downstream of a
+        // selection can be driven at all.) See `RowDriver`.
+        var rowRefusal: String?
+        if let outcome = RowDriver.select(rowOf: v) {
+            if case .refused(let why) = outcome { rowRefusal = why } else { return report(outcome) }
         }
         // Custom controls (e.g. the toolbar project/status title) carry no target/action — they're
         // driven by a click gesture recognizer. Invoke its action directly, the same way a click
         // would, so these are actionable without synthesizing a system event.
-        if let v = obj as? NSView {
-            for case let click as NSClickGestureRecognizer in v.gestureRecognizers {
-                if let action = click.action, NSApp.sendAction(action, to: click.target, from: click) { return true }
-            }
+        for case let click as NSClickGestureRecognizer in v.gestureRecognizers {
+            if let action = click.action, NSApp.sendAction(action, to: click.target, from: click) { return true }
         }
         // Last resort: views that are actionable only on the AX layer. The one that matters is
         // NSToolbarItemViewer — on macOS 26+ a toolbar item's label AND press-ability live here,
         // while the inner control (if any) is an anonymous SwiftUI-rendered shell.
-        if let v = obj as? NSView, AXBridge.canPress(v) { return AXBridge.press(v) }
-        return false
+        if AXBridge.canPress(v) { return AXBridge.press(v) }
+        // Nothing did anything, so say so — with the row's reason when there was one, since a
+        // caller aiming at a list row wants to hear about the row, not about the view's class.
+        return refuse(rowRefusal ?? ("has no action: it is not a control, not inside a table row, carries no click gesture, and offers no press on its accessibility layer (role \(Self.role(v)))."
+            // A view that does its own click handling is the one case worth naming: the driver
+            // deliberately doesn't synthesize mouse events (a view that runs its own tracking loop
+            // would hold the main thread until a mouseUp that is never coming).
+            + (Self.handlesItsOwnClicks(v) ? " It handles clicks in its own mouseDown, which is not synthesized — act on its enclosing row, or give it an accessibility press." : "")))
+    }
+
+    /// Can `performClick` on this control actually do anything? It sends the control's action if
+    /// there is one, and flips a checkbox / radio / switch / segmented control even when there
+    /// isn't. Everything else — an image view, a static label, a custom control wired some other
+    /// way — is a silent no-op, and reporting `ok` for one is the whole bug this file's rules are
+    /// about.
+    static func clickDoesSomething(_ c: NSControl) -> Bool {
+        if c.action != nil { return true }
+        if let b = c as? NSButton { return axRole(b) == .checkBox || axRole(b) == .radioButton }
+        return c is NSSwitch || c is NSSegmentedControl
+    }
+
+    /// Does this view implement `mouseDown` itself, rather than inheriting NSView's?
+    static func handlesItsOwnClicks(_ v: NSView) -> Bool {
+        let sel = #selector(NSView.mouseDown(with:))
+        return class_getMethodImplementation(type(of: v), sel) != class_getMethodImplementation(NSView.self, sel)
+    }
+
+    /// Report a `RowDriver` outcome as this driver's own note/refusal.
+    private func report(_ outcome: RowDriver.Outcome) -> Bool {
+        switch outcome {
+        case .done(let note): return did(note)
+        case .refused(let why): return refuse(why)
+        }
     }
 
     func capture(to url: URL, window: String?) -> String {
@@ -642,31 +710,6 @@ extension UIDriver {
         return out
     }
 
-    /// Post a keyDown/keyUp pair into the app's own event queue (not a CGEvent, so no
-    /// Accessibility grant and no need to be frontmost). Everything downstream — local monitors,
-    /// `keyDown(with:)`, the field editor — sees an ordinary keystroke.
-    func sendKey(text: String, window: String?) -> String {
-        let windows = (NSApp?.windows ?? []).filter { $0.isVisible }
-        let target = window.flatMap { want in windows.first { $0.title.range(of: want, options: .caseInsensitive) != nil } }
-            ?? NSApp?.keyWindow ?? windows.first
-        guard let win = target else { return "ERROR: no visible window to type into." }
-        guard !text.isEmpty else { return "ERROR: 'text' is empty." }
-        for ch in text {
-            let s = String(ch)
-            for down in [true, false] {
-                guard let e = NSEvent.keyEvent(with: down ? .keyDown : .keyUp, location: .zero,
-                                               modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                                               windowNumber: win.windowNumber, context: nil,
-                                               characters: s, charactersIgnoringModifiers: s,
-                                               isARepeat: false, keyCode: 0) else {
-                    return "ERROR: could not make a key event for \"\(s)\"."
-                }
-                NSApp?.postEvent(e, atStart: false)
-            }
-        }
-        return "ok: typed \"\(text)\" into window \"\(win.title)\" (ui_focus to see where it landed)"
-    }
-
     func assign(_ obj: AnyObject, text: String) -> Bool {
         // AX-only elements (SwiftUI text fields): the AX value setter is the real input path.
         if !(obj is NSView) { return AXBridge.setValue(obj, text: text) }
@@ -703,6 +746,11 @@ extension UIDriver {
         case is NSTextView: return "textView"
         case is NSImageView: return "image"
         case is NSTableView: return "table"
+        // A row and its cell read as what they ARE, not as the app's private subclass name
+        // (`InspectorFileCell`) — the same vocabulary the iOS walk uses, so `ui_find role:row`
+        // finds the thing a caller means to click.
+        case is NSTableRowView: return "row"
+        case is NSTableCellView: return "cell"
         case is NSScrollView: return "scrollView"
         case is NSControl: return "control"
         default:
@@ -756,9 +804,22 @@ extension UIDriver {
         var a: [String] = []
         // A menu button isn't activatable in-process (see `perform`) — its items are.
         if let b = v as? NSButton, b.menu != nil { return [] }
-        if v is NSControl { a.append("activate") }
-        else if v.gestureRecognizers.contains(where: { $0 is NSClickGestureRecognizer }) { a.append("activate") }
-        else if AXBridge.canPress(v) { a.append("activate") }   // AX-layer actionability (toolbar items)
+        // Mirror `perform` exactly, or the walk promises something the act won't do (and vice
+        // versa): a control counts only when a click can move it (a list is a container of rows;
+        // a static label or an icon clicks into the void), while a click gesture or an AX press
+        // counts wherever it is.
+        let clickable = (v as? NSControl).map { c in
+            (c as? NSTableView).map { $0.action != nil } ?? clickDoesSomething(c)
+        } ?? false
+        let row = RowDriver.rowActions(of: v)                   // one lookup, not one per question
+        if clickable
+            || v.gestureRecognizers.contains(where: { $0 is NSClickGestureRecognizer })
+            || AXBridge.canPress(v) {                           // AX-layer actionability (toolbar items)
+            a.append("activate")
+        } else if row.selectable {
+            a.append("activate")                                // a row, its cell, or anything in one: selects
+        }
+        if let expansion = row.expansion { a.append(expansion) }
         if let tf = v as? NSTextField, tf.isEditable { a.append("setValue") }
         if v is NSTextView { a.append("setValue") }
         return a

@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- **List rows are drivable.** `ui_act` on an `NSTableView`/`NSOutlineView` row — the row view, its
+  cell, or any label or icon drawn inside one — now SELECTS that row: the app's `shouldSelectRow`/
+  `shouldSelectItem` veto and its `selectionIndexesForProposedSelection` filter both get their say,
+  the list takes keyboard focus, and the selection notification fires exactly ONCE (AppKit posts it
+  itself; the driver used to call the delegate again on top, so every app saw two clicks). Rows read
+  as role `row`/`cell` in the walk. Nothing downstream of a row selection — a file browser, an
+  inspector's detail pane — was reachable before this.
+- **Outline rows open and close.** `ui_act` with `expand`, `collapse` or `toggle` on an outline row
+  does what its disclosure triangle does, from the row itself; the applicable one is advertised in
+  the element's actions.
+- **`ui_key` sends real keys, not just characters.** `key` takes a named key ("space", "up",
+  "return", "escape", "tab", "pageup", "f3"…) with optional modifiers ("cmd+f", "shift+tab"), and
+  `keyCode` sends an explicit virtual code; typed `text` now carries the right code per character
+  too. Events were built with `keyCode: 0`, which is the "a" key to everything that routes on the
+  code — space for Quick Look, arrows for list navigation, a window's ⌘F monitor.
+- **`toggle` still flips a control.** It means the outline disclosure only when the view's row
+  actually has something to open; anywhere else it activates, as it always did.
+- **A no-op is no longer reported as success.** Every NSView answers yes to AppKit's
+  "is press allowed?" question, so plain containers, rows and static labels all advertised
+  `activate` and all answered `ok` while doing nothing — the single hardest thing to diagnose from
+  the far end of a driver session. Press-ability now comes from an actionable AX role or the view's
+  own override of the press, and a refusal says WHY ("is a list — act on one of its ROWS…", "is
+  disabled", "is no longer in a row … snapshot again"). A successful act says what it did
+  ("selected row 3 of 12"). A control a click cannot move — a file's icon (`NSImageView` is an
+  `NSControl` too), a static label, any action-less control — falls through to its row instead of
+  answering `ok` for a `performClick` that did nothing.
+- **Note for hosts:** `ui_key` no longer requires `text`, but the tool's schema is served by
+  AgentPad while the implementation ships in the app's embedded SDK — an app built against an
+  older AgentPadDevHelper answers a `key`-only call with "ERROR: missing 'text'." Update the
+  package in the app to use named keys.
+
 - **Windows are named in the walk.** `ui_snapshot`/`ui_read` root each macOS window at its frame
   view, which carries no accessible name — so every window read as an anonymous `NSThemeFrame` and
   the only way to tell one from another was the first label inside it (a driver run duly called a

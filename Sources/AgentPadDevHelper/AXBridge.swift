@@ -164,8 +164,33 @@ extension AXBridge {
     private static let pressSel = NSSelectorFromString("accessibilityPerformPress")
     private static let setValueSel = NSSelectorFromString("setAccessibilityValue:")
 
+    /// AX roles whose whole point is being pressed. `NSToolbarItemViewer` — the one native view
+    /// that is ONLY drivable on the AX layer — is `AXButton` here and nothing else.
+    private static let pressableRoles: Set<String> = [
+        "AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXMenuButton",
+        "AXPopUpButton", "AXSwitch", "AXDisclosureTriangle", "AXMenuItem",
+    ]
+
+    /// Can this element really be pressed?
+    ///
+    /// `isAccessibilitySelectorAllowed(accessibilityPerformPress)` is **true for every NSView** —
+    /// AppKit allows the selector on anything — so asking it alone made a plain container, a table
+    /// row and a static label all advertise `activate` and all report `ok` while doing exactly
+    /// nothing. That false success is worse than a refusal: it's what makes a driver session
+    /// impossible to diagnose. For a view the answer has to come from what it IS: an actionable AX
+    /// role, or its own override of the press.
     static func canPress(_ obj: AnyObject) -> Bool {
-        obj.isAccessibilitySelectorAllowed?(pressSel) ?? obj.responds(to: pressSel)
+        guard obj.isAccessibilitySelectorAllowed?(pressSel) ?? obj.responds(to: pressSel) else { return false }
+        guard let view = obj as? NSView else { return true }   // AX-only element: its press is its own
+        if let raw = rawRole(view), pressableRoles.contains(raw) { return true }
+        // Cell-backed controls answer AXUnknown at the view level and name themselves on the cell.
+        if let cell = (view as? NSControl)?.cell?.accessibilityRole()?.rawValue, pressableRoles.contains(cell) { return true }
+        return overridesPress(type(of: view))
+    }
+
+    /// Does this class implement the press itself, rather than inheriting NSView's do-nothing one?
+    private static func overridesPress(_ cls: AnyClass) -> Bool {
+        class_getMethodImplementation(cls, pressSel) != class_getMethodImplementation(NSView.self, pressSel)
     }
 
     /// Perform the AX press. Some AppKit hosts (NSToolbarItemViewer) fire the action but still

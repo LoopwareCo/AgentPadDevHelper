@@ -40,8 +40,20 @@ final class DevToolHandler {
                 let r = self.driver.focus(window: arguments["window"] as? String)
                 completion(r, r.hasPrefix("ERROR"))
             case "ui_key":
-                guard let text = arguments["text"] as? String else { return completion("ERROR: missing 'text'.", true) }
-                let r = self.driver.key(text: text, window: arguments["window"] as? String)
+                // `text` types; `key`/`keyCode` press ONE key with its real virtual key code —
+                // which is what keyCode-driven handlers (space for Quick Look, the arrows, ⌘F)
+                // actually route on. One of the three is required.
+                // Accept a list or one string — and split that string, so "cmd+shift" and
+                // "command shift" mean what they obviously mean instead of matching nothing.
+                let modifiers = (arguments["modifiers"] as? [String])
+                    ?? (arguments["modifiers"] as? String).map {
+                        $0.split(whereSeparator: { "+, ".contains($0) }).map(String.init)
+                    } ?? []
+                let r = self.driver.key(text: arguments["text"] as? String,
+                                        named: arguments["key"] as? String,
+                                        keyCode: arguments["keyCode"] as? Int,
+                                        modifiers: modifiers,
+                                        window: arguments["window"] as? String)
                 completion(r, r.hasPrefix("ERROR"))
             case "ui_shot":
                 guard let path = arguments["path"] as? String else { return completion("ERROR: missing 'path'.", true) }
