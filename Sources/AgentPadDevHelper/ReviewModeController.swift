@@ -36,11 +36,6 @@ final class ReviewModeController {
     /// True while the token is the automatic "what you're looking at" default (refreshed on
     /// every send), false once the user explicitly chose an element (kept until removed).
     private var attachedIsDefault = true
-    /// The window an explicitly chosen element lives in — the shot is pinned to it, so clicking
-    /// another window between choosing and sending can't swap what's captured. nil while the
-    /// token is the default (the shot then follows the reviewed window).
-    private weak var attachedWindow: ElementPath.PlatformWindow?
-
     /// The last of the app's OWN windows to hold key. Review Mode's bar/compose window takes
     /// key as soon as the mode turns on, so `keyWindow` stops naming the window under review
     /// from that moment; this is what `ElementPath.reviewedWindow()` falls back to.
@@ -72,7 +67,6 @@ final class ReviewModeController {
             overlay = nil
             hideBar()
             attachedElement = nil
-            attachedWindow = nil
             stopTrackingKeyWindow()
         }
         onModeChanged?(active)
@@ -130,7 +124,7 @@ final class ReviewModeController {
 
     private func pushElementToBar() {
         let name = attachedElement.flatMap { $0.path.last.map(ElementPath.displayName(for:)) }
-        barViewController?.setElementName(name)
+        barViewController?.setTarget(name: name, symbolName: "viewfinder")
     }
 
     // MARK: - choosing
@@ -143,7 +137,6 @@ final class ReviewModeController {
             guard let self else { return }
             self.overlay = nil
             self.attachedElement = ElementPath.descriptor(for: chosen)
-            self.attachedWindow = ElementPath.window(of: chosen)
             self.attachedIsDefault = false
             self.barViewController?.setChoosing(false)
             self.pushElementToBar()
@@ -173,22 +166,17 @@ final class ReviewModeController {
         if attachedIsDefault {
             attachedElement = ElementPath.defaultDescriptor()
         }
-        // The reviewed window, as the user sees it right now — the one holding an explicitly
-        // chosen element, else whichever window they're working in. (The bar/overlay are their
-        // own windows, so they're never in the shot.)
-        let screenshot = ElementPath.captureWindowPNGBase64(of: attachedIsDefault ? nil : attachedWindow)
         guard isActive else { return }
-        onSubmit?(FeedbackPayload(message: message, element: attachedElement, screenshotPNG: screenshot))
+        // No screenshot: feedback travels as text + the element descriptor only.
+        onSubmit?(FeedbackPayload(message: message, element: attachedElement))
         // Back to the default scope for the next thought.
         attachedIsDefault = true
-        attachedWindow = nil
         refreshDefaultElement()
     }
 
     private func removeElement() {
         // ✕ on the token: this feedback is about the app in general.
         attachedElement = nil
-        attachedWindow = nil
         attachedIsDefault = false
         pushElementToBar()
     }
@@ -198,7 +186,7 @@ final class ReviewModeController {
         bar.onChooseUI = { [weak self] in self?.beginChoosing() }
         bar.onCancelChoose = { [weak self] in self?.cancelChoosing() }
         bar.onDone = { [weak self] in self?.setActive(false) }
-        bar.onRemoveElement = { [weak self] in self?.removeElement() }
+        bar.onRemoveTarget = { [weak self] in self?.removeElement() }
     }
 
     // MARK: - hosting: macOS floating bar panel

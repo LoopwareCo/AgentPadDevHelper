@@ -21,13 +21,31 @@ import AppKit
 
 /// Draws the selection rect + role/name tag. Lives in each overlay window; coordinates are
 /// window-base (== this content view's own, since the overlay exactly covers its host window).
-private final class ReviewHighlightView: NSView {
-    var rect: NSRect?
-    var name: String?
+///
+/// `public` because AgentPad reuses this exact view for its own web-element picker overlay
+/// (`ElementPickerOverlay`) instead of copying the drawing — one highlight, so picking a
+/// button inside a reviewed app and picking an element on a web page can never look different.
+public final class ReviewHighlightView: NSView {
+    /// The rect to highlight, in this view's coordinates; nil draws nothing.
+    public var rect: NSRect? { didSet { needsDisplay = true } }
+    /// The role/name tag drawn beside the rect; nil or empty draws no tag.
+    public var name: String? { didSet { needsDisplay = true } }
 
-    override var isFlipped: Bool { false }
+    public override init(frame frameRect: NSRect) { super.init(frame: frameRect) }
+    public required init?(coder: NSCoder) { super.init(coder: coder) }
 
-    override func draw(_ dirtyRect: NSRect) {
+    /// Place the highlight (and its tag) in one step.
+    public func set(rect: NSRect?, tag: String?) {
+        self.rect = rect
+        self.name = tag
+    }
+
+    /// Hide the highlight entirely.
+    public func clear() { set(rect: nil, tag: nil) }
+
+    public override var isFlipped: Bool { false }
+
+    public override func draw(_ dirtyRect: NSRect) {
         guard let rect else { return }
         let accent = NSColor.controlAccentColor
         accent.withAlphaComponent(0.15).setFill()
