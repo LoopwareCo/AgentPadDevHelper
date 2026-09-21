@@ -14,6 +14,10 @@ final class DevToolHandler {
     func call(_ name: String, arguments: [String: Any], completion: @escaping (_ text: String, _ isError: Bool) -> Void) {
         onMain {
             switch name {
+            case "ui_pick_tree":
+                // Not an agent tool: the VIEWER asks for this when the user starts choosing UI to
+                // comment on, and hit-tests the answer locally from then on.
+                completion(self.driver.pickTreeJSON(maxDepth: arguments["maxDepth"] as? Int ?? 40), false)
             case "ui_snapshot":
                 completion(self.driver.snapshot(maxDepth: arguments["maxDepth"] as? Int ?? 16), false)
             case "ui_find":
