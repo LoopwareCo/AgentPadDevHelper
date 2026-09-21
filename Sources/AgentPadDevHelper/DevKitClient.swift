@@ -35,6 +35,9 @@ final class DevKitClient {
         lock.unlock()
 
         AppIdentity.prepareIcon()
+        // Whether the user is LOOKING at this app — what AgentPad's comment bar names.
+        ForegroundReporter.shared.onChange = { [weak self] active in self?.broadcastForeground(active) }
+        ForegroundReporter.shared.start()
         dev.onWidgetsChanged = { [weak self] in self?.broadcastWidgets() }
         dev.onValueChanged = { [weak self] widgetId, json in self?.broadcastValue(widgetId, json) }
         // Review UI Mode reports through the same fan-out. Wired on main because the
@@ -180,6 +183,11 @@ final class DevKitClient {
         lock.lock(); let all = Array(sessions.values); lock.unlock()
         all.forEach { $0.sendWidgets(json) }
     }
+    private func broadcastForeground(_ active: Bool) {
+        lock.lock(); let all = Array(sessions.values); lock.unlock()
+        all.forEach { $0.sendForeground(active) }
+    }
+
     private func broadcastValue(_ widgetId: String, _ json: String) {
         lock.lock(); let all = Array(sessions.values); lock.unlock()
         all.forEach { $0.sendValue(widgetId: widgetId, json: json) }
@@ -306,6 +314,9 @@ private final class Session {
         ]
         if !AppIdentity.bundleID.isEmpty { obj["bundleId"] = AppIdentity.bundleID }
         if AppIdentity.isSimulator { obj["sim"] = true }
+        // Seed the registry with the state as it is right now; `sendForeground` carries it from
+        // here. A hello with no key at all is an older SDK, which AgentPad reads as "can't say".
+        obj["foreground"] = ForegroundReporter.shared.isForeground
         if !AppIdentity.version.isEmpty { obj["version"] = AppIdentity.version }
         if let icon = AppIdentity.iconPNGBase64 { obj["iconPNG"] = icon }
         // Inside a VM, say so and say WHERE: AgentPad scopes the app to the session whose VM has this
@@ -328,6 +339,13 @@ private final class Session {
             self.send(["widgets": ["specsJSON": specsJSON]])
         }
     }
+    func sendForeground(_ active: Bool) {
+        queue.async { [weak self] in
+            guard let self, self.claimed else { return }
+            self.send(["foreground": ["active": active]])
+        }
+    }
+
     func sendValue(widgetId: String, json: String) {
         queue.async { [weak self] in
             guard let self, self.claimed else { return }
