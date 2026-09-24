@@ -8,7 +8,7 @@ import AppKit
 // MARK: - the neutral card model
 
 /// Everything a feedback card renders, pre-resolved by the caller — this ONE view draws both
-/// AgentPad's UI Feedback Inbox cards (adapted from `UIFeedbackItem` by the viewer, which also
+/// AgentPad's Comment Inbox cards (adapted from `UIFeedbackItem` by the viewer, which also
 /// supplies the app icon and the origin line) and the SDK's own pending list (adapted from
 /// `OutboxItem`). Keeping the model neutral is what lets the view live here: this package can't
 /// know either side's item type.

@@ -7,7 +7,7 @@ import Foundation
 /// travels back over the same connection. That whole path is `#if DEBUG` (see
 /// `AgentPadDevHelper.start()`) and needs a *second* process to be the reviewer — neither of which
 /// fits the one app that is its own reviewer: **AgentPad reviewing AgentPad**. It already hosts the
-/// UI Feedback Inbox, so there is nothing to dial.
+/// Comment Inbox, so there is nothing to dial.
 ///
 /// So this is the same `ReviewModeController` — same floating bar, same Choose UI overlay, same
 /// element path and window screenshot — wired straight to a closure instead of a connection. It is
