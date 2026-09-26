@@ -292,11 +292,12 @@ extension UIDriver {
         }
         // AX-only elements (SwiftUI controls, iOS 26 nav-bar platter items) are driven on the AX layer.
         guard let v = obj as? UIView else { return AXBridge.perform(obj, action: action) }
-        // Table/collection cells: route through the real selection delegate.
-        if let cell = v as? UITableViewCell, let table = cell.ap_enclosingTableView, let ip = table.indexPath(for: cell) {
-            table.selectRow(at: ip, animated: false, scrollPosition: .none)
-            table.delegate?.tableView?(table, didSelectRowAt: ip)
-            return true
+        // A row, or anything in one with no action of its own: select it through the real
+        // selection delegate, as a tap there does.
+        if let select = Self.rowSelection(for: v) {
+            if select() { return true }
+            actionRefusal = "is in a row the list won't select."
+            return false
         }
         // iOS 26/27 alert buttons (`_UIInterfaceActionCustomViewRepresentationView`) are custom
         // representation views whose `accessibilityActivate()` is a NO-OP — route through the
@@ -339,6 +340,8 @@ extension UIDriver {
         // sendActions for custom UIControls that don't implement activation.
         if v.accessibilityActivate() { return true }
         if let control = v as? UIControl {
+            // Sending actions nobody listens for runs nothing — say so rather than a hollow ok.
+            if Self.isDeadButton(control) { actionRefusal = "is a button with no action (decoration)."; return false }
             control.sendActions(for: .primaryActionTriggered)
             control.sendActions(for: .touchUpInside)
             return true
@@ -438,9 +441,64 @@ extension UIDriver {
         if let tv = v as? UITextView { return tv.text }
         return nil
     }
+    /// What a tap on `v` selects, if it lands on a row: `v` is a table/collection cell, or sits in
+    /// one without an action of its own — its label, its icon, the disclosure chevron (which iOS 26
+    /// draws as a target-less UIButton). nil for a live control in a row (a UISwitch toggles, it
+    /// doesn't select) and for a list that doesn't allow selection. The closure asks the delegate
+    /// first, as a tap does (`willSelectRowAt` / `shouldSelectItemAt`), and answers whether it ran.
+    static func rowSelection(for v: UIView) -> (() -> Bool)? {
+        let routes = v is UITableViewCell || v is UICollectionViewCell || isDeadButton(v)
+            || (!(v is UIControl) && !v.accessibilityTraits.contains(.button))
+        guard routes else { return nil }
+        for view in sequence(first: v, next: { $0.superview }) {
+            // Part of a live control (a switch's knob) belongs to that control, not the row.
+            if view !== v, view is UIControl, !isDeadButton(view) { return nil }
+            if let cell = view as? UITableViewCell {
+                guard let table = cell.ap_enclosingTableView, table.allowsSelection,
+                      let ip = table.indexPath(for: cell) else { return nil }
+                return {
+                    var target = ip
+                    if let delegate = table.delegate,
+                       delegate.responds(to: #selector(UITableViewDelegate.tableView(_:willSelectRowAt:))) {
+                        guard let redirected = delegate.tableView?(table, willSelectRowAt: ip) else { return false }
+                        target = redirected
+                    }
+                    table.selectRow(at: target, animated: false, scrollPosition: .none)
+                    table.delegate?.tableView?(table, didSelectRowAt: target)
+                    return true
+                }
+            }
+            if let cell = view as? UICollectionViewCell {
+                guard let list = sequence(first: cell.superview, next: { $0?.superview })
+                        .compactMap({ $0 as? UICollectionView }).first,
+                      list.allowsSelection, let ip = list.indexPath(for: cell) else { return nil }
+                return {
+                    guard list.delegate?.collectionView?(list, shouldSelectItemAt: ip) ?? true else { return false }
+                    list.selectItem(at: ip, animated: false, scrollPosition: [])
+                    list.delegate?.collectionView?(list, didSelectItemAt: ip)
+                    return true
+                }
+            }
+            // A tap handler on the way up (a tappable card around this label) gets the tap first.
+            if (view.gestureRecognizers ?? []).contains(where: { $0 is UITapGestureRecognizer && $0.isEnabled }) { return nil }
+        }
+        return nil
+    }
+
+    /// A control a tap can't trigger: it ignores touches, or it's a UIButton nothing listens to
+    /// (no target, no UIAction, no menu). UIKit draws some row chrome this way (the disclosure
+    /// chevron); a tap on it falls through to whatever is below.
+    static func isDeadButton(_ v: UIView) -> Bool {
+        guard v is UIControl else { return false }
+        if !v.isUserInteractionEnabled { return true }
+        guard let b = v as? UIButton else { return false }
+        return b.allTargets.isEmpty && b.allControlEvents.isEmpty && b.menu == nil
+    }
+
     private static func actions(_ v: UIView) -> [String] {
         var a: [String] = []
-        if v is UIControl || v is UITableViewCell || v is UICollectionViewCell { a.append("activate") }
+        if rowSelection(for: v) != nil { a.append("activate") }     // a row, its cell, or anything in one
+        else if v is UIControl && !isDeadButton(v) { a.append("activate") }
         // Accessibility elements that aren't UIControls still activate through
         // `accessibilityActivate()` — modern UIKit chrome (alert ACTION views, nav-bar platter
         // items) is built this way, and gating on UIControl made every iOS 27 alert button read

@@ -52,8 +52,12 @@ extension AXBridge {
 
     /// A view whose AX-only elements are worth grafting into the walk: any container that is not
     /// a real control and not itself one accessibility element (see `isGraftPoint(isControl:…)`).
+    /// Never a list cell: once UIKit's AX bundle is loaded a cell answers with proxy elements —
+    /// a "button" for the row, a copy of its switch — that duplicate views the walk already has,
+    /// and whose `accessibilityActivate()` does nothing in-process (a hollow "ok" on the row).
     static func isGraftPoint(_ v: UIView) -> Bool {
-        isGraftPoint(isControl: v is UIControl, isAccessibilityElement: v.isAccessibilityElement)
+        if v is UITableViewCell || v is UICollectionViewCell { return false }
+        return isGraftPoint(isControl: v is UIControl, isAccessibilityElement: v.isAccessibilityElement)
     }
 
     /// AX-only children of a container: its accessibility elements minus anything the view walk
